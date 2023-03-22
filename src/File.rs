@@ -97,7 +97,7 @@ impl ModuleAbstract for File
 		return Ok(self._name.clone());
 	}
 	
-	fn setConfig(&mut self, mut configs: HashMap<String, String>) -> anyhow::Result<()>
+	fn setConfig(&mut self, configs: HashMap<String, String>) -> anyhow::Result<()>
 	{
 		/*if(!configs.contains_key("path"))
 		{
