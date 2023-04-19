@@ -2,7 +2,7 @@ use std::fmt;
 use crate::ModuleAbstract::ModuleAbstract;
 use crate::OneLog::OneLog;
 
-#[derive(Clone)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Type
 {
 	DEBUG,
@@ -17,6 +17,21 @@ pub enum Type
 
 impl Type
 {
+	pub fn to_string(&self) -> String
+	{
+		match *self
+		{
+			Type::DEBUG => "DEBUG".to_string(),
+			Type::DEBUGERR => "DEBUGERR".to_string(),
+			Type::ERROR => "ERROR".to_string(),
+			Type::FATAL => "FATAL".to_string(),
+			Type::NOTICE => "NOTICE".to_string(),
+			Type::NOTICEDERR => "NOTICEDERR".to_string(),
+			Type::WARNING => "WARNING".to_string(),
+			Type::NORMAL => "NORMAL".to_string()
+		}
+	}
+	
 	pub fn convert4LengthString(&self) -> String
 	{
 		match *self
@@ -28,11 +43,11 @@ impl Type
 			Type::NOTICE => "NOTI".to_string(),
 			Type::NOTICEDERR => "NOER".to_string(),
 			Type::WARNING => "WARN".to_string(),
-			_ => "".to_string()
+			Type::NORMAL => "    ".to_string()
 		}
 	}
 	
-	pub fn launchModuleFunc(module: &Box<dyn ModuleAbstract>, onelog: OneLog)
+	pub fn launchModuleFunc(module: &Box<dyn ModuleAbstract + Send + Sync>, onelog: OneLog)
 	{
 		match onelog.level
 		{
@@ -43,7 +58,7 @@ impl Type
 			Type::NOTICE => module.Event_onNotice(onelog),
 			Type::NOTICEDERR => module.Event_onNoticeErr(onelog),
 			Type::WARNING => module.Event_onWarning(onelog),
-			_ => module.Event_onNormal(onelog)
+			Type::NORMAL => module.Event_onNormal(onelog)
 		}
 	}
 }

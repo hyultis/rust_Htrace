@@ -1,0 +1,23 @@
+{
+    "module": {
+        "file": {
+            "colors": {
+                "DEBUG": "0",
+                "DEBUGERR": "1",
+                "ERROR": "1;97;41",
+                "FATAL": "1;97;45",
+                "NOTICE": "1;32",
+                "NOTICEDERR": "35",
+                "WARNING": "1;97;43",
+                "NORMAL": "0"
+            },
+            "lineReturn": "|",
+            "lineFormat": "{time} {lvl} ({file}:l{line})) : {msg}",
+            "path": "./traces",
+            "forceInOneFile": "",
+            "byHour": false,
+            "bySrc": false,
+            "byThreadId": true
+        }
+    }
+}

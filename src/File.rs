@@ -1,66 +1,108 @@
 use std::collections::HashMap;
-use std::fs::{create_dir_all, File as stdFile, OpenOptions};
+use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use anyhow::anyhow;
+use anyhow::Result;
+use json::JsonValue;
+use strfmt::strfmt;
+use crate::HTracer::HTracer;
 use crate::ModuleAbstract::ModuleAbstract;
 use crate::OneLog::OneLog;
+
+pub struct FileConfig
+{
+	pub path: String,
+	pub lineReturn: String,
+	pub lineFormat: String,
+	/// write a file by threadid
+	pub byThreadId: bool,
+	/// write a file by src of trace
+	pub bySrc: bool,
+	/// write a file by hour (add hour after date in filename)
+	pub byHour: bool,
+	/// write all trace in one file (auto append "_{time}.trc")
+	forceInOneFile: Option<String>
+}
+
+impl Default for FileConfig
+{
+	fn default() -> Self {
+		return FileConfig{
+			path: "./traces".to_string(),
+			lineReturn: "|".to_string(),
+			lineFormat: "{time} {lvl} ({file}:l{line})) : {msg}".to_string(),
+			byThreadId: true,
+			bySrc: false,
+			byHour: false,
+			forceInOneFile: None
+		};
+	}
+}
 
 pub struct File
 {
 	_name: String,
-	_forceFilename: Option<String>,
-	_configs: HashMap<String, String>,
-	_basePath: Option<String>
+	_configs: FileConfig
 }
 
 impl File
 {
-	pub fn new(parentPath: String) -> File {
+	pub fn new(config: FileConfig) -> File {
 		return File{
 			_name: String::new(),
-			_forceFilename: None,
-			_configs: HashMap::new(),
-			_basePath: Some(parentPath)
+			_configs: config
 		};
 	}
 	
-	pub fn forceFilename(&mut self, filename: String)
+	fn generateLine(&self, log: OneLog)
 	{
-		self._forceFilename = Some(filename);
-	}
-	
-	fn generateLine(&self, onelog: OneLog)
-	{
-		if(self._basePath.is_none())
+		let mut msg = log.message.clone();
+		if(msg.contains("\n") || msg.contains("\r") || msg.contains("\\n") || msg.contains("\\r"))
 		{
-			return;
-		}
-		//$finalmsg = $objlog->date->format('H:i:s') . ' ' . $this->levelToString($objlog->level) . ' (on /' . $this->getDiffDir(dirname($filename),loader::get_dirRoot()).basename($filename) . ':l' . $line . ') : ' . $objmsg;
-		
-		let mut msg = onelog.message;
-		if(msg.contains("\n") || msg.contains("\r"))
-		{
+			let linereturn = format!("\n{}",self._configs.lineReturn);
 			msg = msg.replace("\n\r","\n");
+			msg = msg.replace("\\n\\r","\n");
 			msg = msg.replace("\r","\n");
-			msg = msg.replace("\n","\n|");
+			msg = msg.replace("\\r","\n");
+			msg = msg.replace("\\n","\n");
+			msg = msg.replace("\n",linereturn.as_str());
 		}
 		
-		let finalmsg = format!("{} {:4} (on {}:l{}) : {}\n",onelog.date.format("%H:%M:%S"),onelog.level,onelog.filename,onelog.fileline,msg);
-		let mut filename = self._forceFilename.clone();
-		if(filename.is_none())
-		{
-			let tmp: Vec<_> = onelog.filename.split("/").collect();
-			let tmp: Vec<_> = tmp.last().unwrap().split(".").collect();
-			filename = Some(tmp[0].to_string());
-		}
 		let mut filedateformat = "%Y:%m:%d";
-		if(true)
+		if(self._configs.byHour)
 		{
 			filedateformat = "%Y%m%d_%H";
 		}
-		let path = format!("{}/traces/{}_{}.trc",self._basePath.clone().unwrap(),filename.unwrap(),onelog.date.format(filedateformat));
-		self.writeToFile(path,finalmsg);
+		
+		let mut vars = HashMap::new();
+		vars.insert("time".to_string(),log.date.format("%H:%M:%S").to_string());
+		vars.insert("lvl".to_string(),log.level.convert4LengthString());
+		vars.insert("file".to_string(),log.filename.clone());
+		vars.insert("line".to_string(),log.fileline.to_string());
+		vars.insert("msg".to_string(),msg);
+		
+		let format = self._configs.lineFormat.clone();
+		let formatResult = strfmt(&format, &vars).unwrap();
+		if self._configs.forceInOneFile.is_some()
+		{
+			let path = format!("{}/{}_{}.trc",self._configs.path,self._configs.forceInOneFile.clone().unwrap(),log.date.format(filedateformat));
+			self.writeToFile(path, formatResult.clone());
+		};
+		if self._configs.bySrc
+		{
+			let filename = log.filename.clone();
+			let tmp: Vec<_> = filename.split("/").collect();
+			let tmp: Vec<_> = tmp.last().unwrap().split(".").collect();
+			let filename = tmp[0].to_string();
+			let path = format!("{}/{}_{}.trc",self._configs.path,filename,log.date.format(filedateformat));
+			self.writeToFile(path, formatResult.clone());
+		}
+		if self._configs.byThreadId
+		{
+			let filename = HTracer::threadGetName(log.threadId);
+			let path = format!("{}/{}_{}.trc",self._configs.path,filename,log.date.format(filedateformat));
+			self.writeToFile(path, formatResult.clone());
+		}
 	}
 	
 	fn writeToFile(&self, filepath: String,lineToWrite: String)
@@ -80,41 +122,96 @@ impl File
 		{
 			return;
 		}
+		let mut Rfile = Rfile.unwrap();
 		
-		let _iswrited = Rfile.unwrap().write(lineToWrite.as_bytes());
+		let _iswrited = Rfile.write(format!("{}\n",lineToWrite).as_bytes());
 	}
 }
 
 
 impl ModuleAbstract for File
 {
-	fn setModuleName(&mut self, moduleName: String) -> anyhow::Result<()> {
+	fn setModuleName(&mut self, moduleName: String) -> Result<()> {
 		self._name = moduleName;
 		return Ok(());
 	}
 	
-	fn getModuleName(&self) -> anyhow::Result<String> {
+	fn getModuleName(&self) -> Result<String> {
 		return Ok(self._name.clone());
 	}
 	
-	fn setConfig(&mut self, configs: HashMap<String, String>) -> anyhow::Result<()>
+	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
 	{
-		/*if(!configs.contains_key("path"))
+		if(!configs.contains("path"))
 		{
-			return Err(anyhow!("[Htrace/File] : \"path\" key is absent in config"));
+			configs["path"] = JsonValue::String(self._configs.path.to_string());
 		}
 		else
 		{
-			let tmp = configs.get("path").unwrap().clone();
-			if tmp.starts_with("%dynamic%")
-			{
-				configs.insert("path".to_string(),format!("{}{}","./dynamic",tmp.strip_prefix("%dynamic%").unwrap()));
-			}
-			self._basePath = Some(configs.get("path").unwrap().clone());
-			println!("basepath : {}",self._basePath.clone().unwrap());
-		}*/
+			self._configs.path = configs["path"].to_string();
+		}
 		
-		self._configs = configs;
+		if(!configs.contains("lineReturn"))
+		{
+			configs["lineReturn"] = JsonValue::String(self._configs.lineReturn.to_string());
+		}
+		else
+		{
+			self._configs.lineReturn = configs["lineReturn"].to_string();
+		}
+		
+		if(!configs.contains("lineFormat"))
+		{
+			configs["lineFormat"] = JsonValue::String(self._configs.lineFormat.to_string());
+		}
+		else
+		{
+			self._configs.lineFormat = configs["lineFormat"].to_string();
+		}
+		
+		if(!configs.contains("forceInOneFile"))
+		{
+			configs["forceInOneFile"] = JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string()));
+		}
+		else
+		{
+			let tmp = configs["forceInOneFile"].to_string();
+			if(tmp == "")
+			{
+				self._configs.forceInOneFile = None;
+			}
+			else
+			{
+				self._configs.forceInOneFile = Some(tmp);
+			}
+		}
+		
+		if(!configs.contains("byHour"))
+		{
+			configs["byHour"] = JsonValue::Boolean(self._configs.byHour);
+		}
+		else
+		{
+			self._configs.byHour = configs["byHour"].as_bool().unwrap_or(false);
+		}
+		
+		if(!configs.contains("bySrc"))
+		{
+			configs["bySrc"] = JsonValue::Boolean(self._configs.bySrc);
+		}
+		else
+		{
+			self._configs.bySrc = configs["bySrc"].as_bool().unwrap_or(false);
+		}
+		
+		if(!configs.contains("byThreadId"))
+		{
+			configs["byThreadId"] = JsonValue::Boolean(self._configs.byThreadId);
+		}
+		else
+		{
+			self._configs.byThreadId = configs["byThreadId"].as_bool().unwrap_or(true);
+		}
 		
 		Ok(())
 	}
@@ -160,6 +257,6 @@ impl ModuleAbstract for File
 	}
 	
 	fn Event_onExit(&self) {
-		todo!()
+	
 	}
 }
