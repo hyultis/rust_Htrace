@@ -29,7 +29,7 @@ impl Default for CommandLineConfig
 		return CommandLineConfig{
 			colors,
 			lineReturn: "|".to_string(),
-			lineFormat: "\x1b[3m{time}\x1b[0m {lvl} ({file}:l{line})) : \x1b[{color}m{msg}\x1b[0m".to_string(),
+			lineFormat: "\x1b[3m{time}\x1b[0m {lvl} ({file}:l{line}) : \x1b[{color}m{msg}\x1b[0m".to_string(),
 		};
 	}
 }

@@ -30,7 +30,7 @@ impl Default for FileConfig
 		return FileConfig{
 			path: "./traces".to_string(),
 			lineReturn: "|".to_string(),
-			lineFormat: "{time} {lvl} ({file}:l{line})) : {msg}".to_string(),
+			lineFormat: "{time} {lvl} ({file}:l{line}) : {msg}".to_string(),
 			byThreadId: true,
 			bySrc: false,
 			byHour: false,
@@ -68,7 +68,7 @@ impl File
 			msg = msg.replace("\n",linereturn.as_str());
 		}
 		
-		let mut filedateformat = "%Y:%m:%d";
+		let mut filedateformat = "%Y%m%d";
 		if(self._configs.byHour)
 		{
 			filedateformat = "%Y%m%d_%H";

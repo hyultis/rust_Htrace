@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::{Debug, Display};
 use once_cell::sync::OnceCell;
 use crate::ModuleAbstract::ModuleAbstract;
@@ -8,6 +9,7 @@ use chrono::Local;
 use crate::OneLog::OneLog;
 use crate::Type::Type;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::sync::RwLock;
 use std::thread;
 use std::thread::JoinHandle;
@@ -32,7 +34,7 @@ impl HTracer
 {
 	fn new() -> HTracer {
 		return HTracer {
-			_config: HConfigManager::singleton().get_mut("htrace").unwrap(),
+			_config: HConfigManager::singleton().get("htrace").unwrap(),
 			_modules: DashMap::new(),
 			_thread: RwLock::new(Vec::new()),
 			_threadNames: DashMap::new(),
@@ -56,33 +58,29 @@ impl HTracer
 	pub fn appendModuleToThread(modulename: &str,mut newmodule : impl ModuleAbstract + Send + Sync + 'static, threadId: u64) -> Result<(),Errors>
 	{
 		let modulename = modulename.to_string();
-		let tracerC = HTracer::singleton();
-		if tracerC._config.get().get("module/file").is_none()
+		let modulepath = format!("module/{}",modulename);
+		let mut tracerC = HTracer::singleton()._config.get_mut();
+		if tracerC.get(modulepath.as_str()).is_none()
 		{
-			tracerC._config.update(|conf|{
-				conf.set("module/file",|node|{
-					*node = JsonValue::new_object();
-				});
-				conf.save().unwrap();
+			tracerC.set(modulepath.as_str(),|node|{
+				*node = JsonValue::new_object();
 			});
 		}
 		
 		let mut tmp = Ok(());
-		tracerC._config.update(|conf|{
-			conf.set("module/file", |node|
-				{
-					tmp = newmodule.setConfig(node);
-				});
-			conf.save().unwrap();
+		tracerC.set(modulepath.as_str(), |node| {
+			tmp = newmodule.setConfig(node);
 		});
+		tracerC.save().unwrap();
 		tmp.map_err(|err|Errors::ModuleConfigError(modulename.to_string(),err))?;
 		newmodule.setModuleName(modulename.clone()).map_err(|err|Errors::ModuleConfigError(modulename.to_string(),err))?;
 		
-		if(!tracerC._modules.contains_key(modulename.as_str()))
+		let module = &HTracer::singleton()._modules;
+		if(!module.contains_key(modulename.as_str()))
 		{
-			tracerC._modules.insert(modulename.clone(), HashMap::new());
+			module.insert(modulename.clone(), HashMap::new());
 		}
-		tracerC._modules.get_mut(modulename.as_str()).unwrap().insert(threadId,Box::new(newmodule));
+		module.get_mut(modulename.as_str()).unwrap().insert(threadId,Box::new(newmodule));
 		return Ok(());
 	}
 	
@@ -91,6 +89,19 @@ impl HTracer
 		let mut hasher = DefaultHasher::new();
 		thread::current().id().hash(&mut hasher);
 		return hasher.finish();
+	}
+	
+	fn logError(error: impl Error, level: Type, file: &str, line: u32)
+	{
+		return;
+		/*error.deref()
+		println!("toto");
+		println!("{:?}",error);
+		println!("{} - {}",file, line);*/
+		let mut tmp1 = "".to_string();
+		let mut tmp2 = "".to_string();
+		let mut tmp3 = 0;
+		HTracer::getBacktraceInfos(&mut tmp1,&mut tmp2,&mut tmp3);
 	}
 	
 	pub fn log<T>(rawEntry : &T, level: Type, file: &str, line: u32)
@@ -157,6 +168,7 @@ impl HTracer
 		}
 	}
 	
+	/// set a name for a thread, this is just visual
 	pub fn threadSetName(name: &str)
 	{
 		HTracer::singleton()._threadNames.insert(HTracer::getThread(),name.to_string());

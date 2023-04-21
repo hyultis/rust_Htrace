@@ -23,14 +23,21 @@ mod tests {
 		
 		let tudzpsofh = "machin".to_string();
 		HTracer::HTracer::log(&tudzpsofh, Type::Type::NORMAL, file!(), line!());
-		println!("{:?}",tudzpsofh);
 		HTrace!(tudzpsofh);
-		println!("{:?}",tudzpsofh);
 		
 		HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
 		HTrace!("test macro", Type::Type::ERROR);
 		HTrace!(21);
 		
-		HTracer::HTracer::drop();
+		/*let configDir = Path::new("./config");
+		match create_dir(configDir) {
+			Ok(_) => {}
+			Err(err) => {
+				HTracer::HTracer::logError(err,Type::Type::ERROR, file!(), line!());
+			}
+		}*/
+		
+		
+		HTracer::HTracer::drop(); // cannot be put in "Drop" because of OnceCell
 	}
 }
