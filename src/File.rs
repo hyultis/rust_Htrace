@@ -142,7 +142,7 @@ impl ModuleAbstract for File
 	
 	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
 	{
-		if(!configs.contains("path"))
+		if(!configs.has_key("path"))
 		{
 			configs["path"] = JsonValue::String(self._configs.path.to_string());
 		}
@@ -151,7 +151,7 @@ impl ModuleAbstract for File
 			self._configs.path = configs["path"].to_string();
 		}
 		
-		if(!configs.contains("lineReturn"))
+		if(!configs.has_key("lineReturn"))
 		{
 			configs["lineReturn"] = JsonValue::String(self._configs.lineReturn.to_string());
 		}
@@ -160,7 +160,7 @@ impl ModuleAbstract for File
 			self._configs.lineReturn = configs["lineReturn"].to_string();
 		}
 		
-		if(!configs.contains("lineFormat"))
+		if(!configs.has_key("lineFormat"))
 		{
 			configs["lineFormat"] = JsonValue::String(self._configs.lineFormat.to_string());
 		}
@@ -169,7 +169,7 @@ impl ModuleAbstract for File
 			self._configs.lineFormat = configs["lineFormat"].to_string();
 		}
 		
-		if(!configs.contains("forceInOneFile"))
+		if(!configs.has_key("forceInOneFile"))
 		{
 			configs["forceInOneFile"] = JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string()));
 		}
@@ -186,7 +186,7 @@ impl ModuleAbstract for File
 			}
 		}
 		
-		if(!configs.contains("byHour"))
+		if(!configs.has_key("byHour"))
 		{
 			configs["byHour"] = JsonValue::Boolean(self._configs.byHour);
 		}
@@ -195,7 +195,7 @@ impl ModuleAbstract for File
 			self._configs.byHour = configs["byHour"].as_bool().unwrap_or(false);
 		}
 		
-		if(!configs.contains("bySrc"))
+		if(!configs.has_key("bySrc"))
 		{
 			configs["bySrc"] = JsonValue::Boolean(self._configs.bySrc);
 		}
@@ -204,7 +204,7 @@ impl ModuleAbstract for File
 			self._configs.bySrc = configs["bySrc"].as_bool().unwrap_or(false);
 		}
 		
-		if(!configs.contains("byThreadId"))
+		if(!configs.has_key("byThreadId"))
 		{
 			configs["byThreadId"] = JsonValue::Boolean(self._configs.byThreadId);
 		}

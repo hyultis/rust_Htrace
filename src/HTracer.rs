@@ -68,7 +68,9 @@ impl HTracer
 		
 		let mut tmp = Ok(());
 		tracerC.set(modulepath.as_str(), |node| {
+			println!("test: {}",node["path"].to_string());
 			tmp = newmodule.setConfig(node);
+			println!("test: {}",node["path"].to_string());
 		});
 		tracerC.save().unwrap();
 		tmp.map_err(|err|Errors::ModuleConfigError(modulename.to_string(),err))?;

@@ -39,10 +39,10 @@ pub enum Errors
 macro_rules! HTrace
 {
     ($a:expr) => {
-         crate::HTracer::HTracer::log(&$a, Type::Type::NORMAL, file!(), line!())
+	    $crate::HTracer::HTracer::log(&$a, $crate::Type::Type::NORMAL, file!(), line!())
     };
     ($a:expr,$b:expr) => {{
-         crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
+	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
     }};
 }
 

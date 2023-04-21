@@ -89,7 +89,7 @@ impl ModuleAbstract for CommandLine
 	
 	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
 	{
-		if(!configs.contains("colors"))
+		if(!configs.has_key("colors"))
 		{
 			configs["colors"] = JsonValue::new_object();
 		}
@@ -116,7 +116,7 @@ impl ModuleAbstract for CommandLine
 			}
 		
 		
-		if(!configs.contains("lineReturn"))
+		if(!configs.has_key("lineReturn"))
 		{
 			configs["lineReturn"] = JsonValue::String(self._configs.lineReturn.to_string());
 		}
@@ -125,7 +125,7 @@ impl ModuleAbstract for CommandLine
 			self._configs.lineReturn = configs["lineReturn"].to_string();
 		}
 			
-		if(!configs.contains("lineFormat"))
+		if(!configs.has_key("lineFormat"))
 		{
 			configs["lineFormat"] = JsonValue::String(self._configs.lineFormat.to_string());
 		}
