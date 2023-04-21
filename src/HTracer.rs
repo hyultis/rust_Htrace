@@ -9,7 +9,6 @@ use chrono::Local;
 use crate::OneLog::OneLog;
 use crate::Type::Type;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::sync::RwLock;
 use std::thread;
 use std::thread::JoinHandle;

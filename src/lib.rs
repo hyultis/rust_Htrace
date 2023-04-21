@@ -10,7 +10,6 @@ pub mod CommandLine;
 pub mod ModuleAbstract;
 pub mod Type;
 mod OneLog;
-mod tests;
 
 use thiserror::Error;
 
