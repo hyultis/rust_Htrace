@@ -32,11 +32,14 @@ static SINGLETON: OnceCell<HTracer> = OnceCell::new();
 impl HTracer
 {
 	fn new() -> HTracer {
+		let tmp = DashMap::new();
+		tmp.insert(0,"main".to_string());
+
 		return HTracer {
 			_config: HConfigManager::singleton().get("htrace").unwrap(),
 			_modules: DashMap::new(),
 			_thread: RwLock::new(Vec::new()),
-			_threadNames: DashMap::new(),
+			_threadNames: tmp,
 		};
 	}
 	

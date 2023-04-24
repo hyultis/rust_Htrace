@@ -64,7 +64,7 @@ impl CommandLine
 		}
 		
 		let mut vars = HashMap::new();
-		vars.insert("time".to_string(),log.date.format("%H:%M:%S").to_string());
+		vars.insert("time".to_string(),log.date.format("%H:%M:%S%.9f").to_string());
 		vars.insert("color".to_string(),self._configs.colors.get(&log.level).unwrap_or(&"0".to_string()).to_string());
 		vars.insert("lvl".to_string(),log.level.convert4LengthString());
 		vars.insert("file".to_string(),log.filename);

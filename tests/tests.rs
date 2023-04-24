@@ -27,8 +27,10 @@ fn log() {
 	HTrace!(tudzpsofh);
 	
 	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
-	HTrace!("test macro", Type::ERROR);
-	HTrace!(21);
+	HTrace!("test macro {}",87);
+	HTrace!((Type::ERROR) "test macro {}",87);
+	//HTrace!(21,Type::ERROR);
+	HTrace!((Type::ERROR) 21);
 	
 	/*let configDir = Path::new("./config");
 	match create_dir(configDir) {

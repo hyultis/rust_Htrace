@@ -21,7 +21,7 @@ pub struct FileConfig
 	/// write a file by hour (add hour after date in filename)
 	pub byHour: bool,
 	/// write all trace in one file (auto append "_{time}.trc")
-	forceInOneFile: Option<String>
+	pub forceInOneFile: Option<String>
 }
 
 impl Default for FileConfig
@@ -75,7 +75,7 @@ impl File
 		}
 		
 		let mut vars = HashMap::new();
-		vars.insert("time".to_string(),log.date.format("%H:%M:%S").to_string());
+		vars.insert("time".to_string(),log.date.format("%H:%M:%S%.9f").to_string());
 		vars.insert("lvl".to_string(),log.level.convert4LengthString());
 		vars.insert("file".to_string(),log.filename.clone());
 		vars.insert("line".to_string(),log.fileline.to_string());

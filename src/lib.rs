@@ -41,9 +41,18 @@ macro_rules! HTrace
     ($a:expr) => {
 	    $crate::HTracer::HTracer::log(&$a, $crate::Type::Type::NORMAL, file!(), line!())
     };
-    ($a:expr,$b:expr) => {{
+	(($b:expr) $a:expr) => {
 	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
-    }};
+    };
+	($a:expr $(,$arg:tt)*) => {
+	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $crate::Type::Type::NORMAL, file!(), line!())
+    };
+	(($b:expr) $a:expr $(,$arg:tt)*) => {
+	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $b, file!(), line!())
+    };
+	/*($a:expr,$b:expr) => {{
+	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
+    }};*/
 }
 
 /*
