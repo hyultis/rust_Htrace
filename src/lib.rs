@@ -22,7 +22,7 @@ pub enum Errors
 	ModuleConfigError(String,#[source] anyhow::Error)
 }
 
-/// shortcut for the log fonction
+/// shortcut for the log fonction (default to Type::NORMAL)
 /// can be use like that :
 /// ```
 /// use Htrace::HTrace;
@@ -30,7 +30,9 @@ pub enum Errors
 ///
 /// let myvar = 42;
 /// HTrace!(myvar);
-/// HTrace!(myvar, Type::DEBUG);
+/// HTrace!("this is : {}",myvar);
+/// HTrace!((Type::DEBUG) myvar);
+/// HTrace!((Type::DEBUG) "this is : {}",myvar);
 ///
 /// ```
 ///
@@ -44,21 +46,63 @@ macro_rules! HTrace
 	(($b:expr) $a:expr) => {
 	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
     };
-	($a:expr $(,$arg:tt)*) => {
+	($a:expr $(,$arg:expr)*) => {
 	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $crate::Type::Type::NORMAL, file!(), line!())
     };
-	(($b:expr) $a:expr $(,$arg:tt)*) => {
+	(($b:expr) $a:expr $(,$arg:expr)*) => {
 	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $b, file!(), line!())
     };
-	/*($a:expr,$b:expr) => {{
-	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
-    }};*/
 }
 
-/*
+/// shortcut for the log function for Result>Error (default to Type::ERROR)
+/// take a result, and if it in error, trace it.
+/// do nothing if result is ok
+/// this only make sense if you want to receive the error information for debugging
+/// can be use like that :
+/// ```
+/// use Htrace::HTraceError;
+/// use Htrace::Type;
+///
+/// let testerror = std::fs::File::open(std::path::Path::new("idontexist.muahahah"));
+/// HTraceError!(testerror);
+/// HTraceError!("this is : {}",testerror);
+/// HTraceError!((Type::DEBUG) testerror);
+/// HTraceError!((Type::DEBUG) "this is : {}",testerror);
+///
+/// ```
 #[macro_export]
 macro_rules! HTraceError
 {
-	($a:expr) => {}
+	($a:tt) => {
+		match $a {
+			Ok(_) => {}
+			Err(ref errorToTrace) => {
+	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!())
+			}
+		}
+    };
+	($desc:expr,$a:expr) => {
+		match $a {
+			Ok(_) => {}
+			Err(ref errorToTrace) => {
+	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!())
+			}
+		}
+    };
+	(($b:expr) $a:expr) => {
+		match $a {
+			Ok(_) => {}
+			Err(ref errorToTrace) => {
+	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $b, file!(), line!())
+			}
+		}
+    };
+	(($b:expr) $desc:expr,$a:expr) => {
+		match $a {
+			Ok(_) => {}
+			Err(ref errorToTrace) => {
+	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $b, file!(), line!())
+			}
+		}
+    };
 }
-*/

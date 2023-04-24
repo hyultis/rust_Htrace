@@ -1,11 +1,12 @@
 #![allow(unused_parens)]
 
 use std::fs::create_dir;
+use std::io;
 use std::path::Path;
 use Hconfig::HConfigManager::HConfigManager;
 use Htrace::HTracer::HTracer;
 use Htrace::Type::Type;
-use Htrace::{HTrace, CommandLine, File};
+use Htrace::{HTrace, CommandLine, File, HTraceError};
 use Htrace::CommandLine::CommandLineConfig;
 use Htrace::File::FileConfig;
 
@@ -28,17 +29,12 @@ fn log() {
 	
 	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
 	HTrace!("test macro {}",87);
-	HTrace!((Type::ERROR) "test macro {}",87);
-	//HTrace!(21,Type::ERROR);
 	HTrace!((Type::ERROR) 21);
-	
-	/*let configDir = Path::new("./config");
-	match create_dir(configDir) {
-		Ok(_) => {}
-		Err(err) => {
-			HTracer::HTracer::logError(err,Type::Type::ERROR, file!(), line!());
-		}
-	}*/
+	HTrace!((Type::ERROR) "test macro {}",87);
+
+	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
+	HTraceError!((Type::FATAL) testerror);
+	HTraceError!((Type::FATAL) "File error is : {}",testerror);
 	
 	HTracer::drop(); // cannot be put in "Drop" because of OnceCell
 }

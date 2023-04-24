@@ -95,19 +95,6 @@ impl HTracer
 		return hasher.finish();
 	}
 	
-	fn logError(error: impl Error, level: Type, file: &str, line: u32)
-	{
-		return;
-		/*error.deref()
-		println!("toto");
-		println!("{:?}",error);
-		println!("{} - {}",file, line);*/
-		let mut tmp1 = "".to_string();
-		let mut tmp2 = "".to_string();
-		let mut tmp3 = 0;
-		HTracer::getBacktraceInfos(&mut tmp1,&mut tmp2,&mut tmp3);
-	}
-	
 	pub fn log<T>(rawEntry : &T, level: Type, file: &str, line: u32)
 		where T: Any + Debug // + ?Display
 	{
