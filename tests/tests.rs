@@ -1,7 +1,6 @@
 #![allow(unused_parens)]
 
 use std::fs::create_dir;
-use std::io;
 use std::path::Path;
 use Hconfig::HConfigManager::HConfigManager;
 use Htrace::HTracer::HTracer;
@@ -12,10 +11,10 @@ use Htrace::File::FileConfig;
 
 #[test]
 fn log() {
-	let configDir = Path::new("./config");
-	if (!configDir.exists())
+	let config_dir = Path::new("./config");
+	if (!config_dir.exists())
 	{
-		create_dir(configDir).unwrap();
+		create_dir(config_dir).unwrap();
 	}
 	
 	HConfigManager::singleton().setConfPath("./config");

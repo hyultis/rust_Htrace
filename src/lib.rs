@@ -73,7 +73,7 @@ macro_rules! HTrace
 #[macro_export]
 macro_rules! HTraceError
 {
-	($a:tt) => {
+	($a:expr) => {
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {

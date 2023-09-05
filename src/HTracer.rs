@@ -1,33 +1,28 @@
 use std::any::Any;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt::{Debug, Display};
-use once_cell::sync::OnceCell;
 use crate::ModuleAbstract::ModuleAbstract;
 use chrono::Local;
 use crate::OneLog::OneLog;
 use crate::Type::Type;
 use std::hash::{Hash, Hasher};
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 use std::thread;
 use std::thread::JoinHandle;
 use dashmap::DashMap;
-use Hconfig::HConfig::HConfig;
 use Hconfig::HConfigManager::HConfigManager;
-use HArcMut::HArcMut;
 use json::JsonValue;
 use crate::Errors;
 
 pub struct HTracer
 {
-	_config: HArcMut<HConfig>,
 	_modules: DashMap<String, HashMap<u64,Box<dyn ModuleAbstract + Sync + Send>> >,
 	_thread: RwLock<Vec<JoinHandle<()>>>,
 	_threadNames: DashMap<u64,String>
 }
 
-static SINGLETON: OnceCell<HTracer> = OnceCell::new();
+static SINGLETON: OnceLock<HTracer> = OnceLock::new();
 
 impl HTracer
 {
@@ -36,7 +31,6 @@ impl HTracer
 		tmp.insert(0,"main".to_string());
 
 		return HTracer {
-			_config: HConfigManager::singleton().get("htrace").unwrap(),
 			_modules: DashMap::new(),
 			_thread: RwLock::new(Vec::new()),
 			_threadNames: tmp,
@@ -61,20 +55,14 @@ impl HTracer
 	{
 		let modulename = modulename.to_string();
 		let modulepath = format!("module/{}",modulename);
-		let mut tracerC = HTracer::singleton()._config.get_mut();
-		if tracerC.get(modulepath.as_str()).is_none()
-		{
-			tracerC.set(modulepath.as_str(),|node|{
-				*node = JsonValue::new_object();
-			});
-		}
+		let mut tracerC = HConfigManager::singleton().get("htrace");
+		tracerC.getOrSetDefault(modulepath.as_str(),JsonValue::new_object());
 		
 		let mut tmp = Ok(());
-		tracerC.set(modulepath.as_str(), |node| {
-			println!("test: {}",node["path"].to_string());
+		if let Some(node) = tracerC.get_mut(modulepath.as_str())
+		{
 			tmp = newmodule.setConfig(node);
-			println!("test: {}",node["path"].to_string());
-		});
+		};
 		tracerC.save().unwrap();
 		tmp.map_err(|err|Errors::ModuleConfigError(modulename.to_string(),err))?;
 		newmodule.setModuleName(modulename.clone()).map_err(|err|Errors::ModuleConfigError(modulename.to_string(),err))?;
