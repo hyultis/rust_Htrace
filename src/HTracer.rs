@@ -7,19 +7,23 @@ use chrono::Local;
 use crate::OneLog::OneLog;
 use crate::Type::Type;
 use std::hash::{Hash, Hasher};
-use std::sync::{OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::thread::JoinHandle;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
 use Hconfig::HConfigManager::HConfigManager;
 use json::JsonValue;
+use parking_lot::{RwLock};
 use crate::Errors;
 
 pub struct HTracer
 {
 	_modules: DashMap<String, HashMap<u64,Box<dyn ModuleAbstract + Sync + Send>> >,
-	_thread: RwLock<Vec<JoinHandle<()>>>,
-	_threadNames: DashMap<u64,String>
+	_deferredLog: RwLock<Vec<OneLog>>,
+	_threadNames: DashMap<u64,String>,
+	_minlvl: ArcSwap<u8>,
+	_writingRun: ArcSwapOption<JoinHandle<()>>
 }
 
 static SINGLETON: OnceLock<HTracer> = OnceLock::new();
@@ -29,11 +33,13 @@ impl HTracer
 	fn new() -> HTracer {
 		let tmp = DashMap::new();
 		tmp.insert(0,"main".to_string());
-
+		
 		return HTracer {
 			_modules: DashMap::new(),
-			_thread: RwLock::new(Vec::new()),
+			_deferredLog: RwLock::new(vec![]),
 			_threadNames: tmp,
+			_minlvl: ArcSwap::new(Arc::new(0)),
+			_writingRun: ArcSwapOption::new(None),
 		};
 	}
 	
@@ -117,12 +123,30 @@ impl HTracer
 		let file = file.to_string();
 		let thisThreadId = HTracer::getThread();
 		
-		HTracer::singleton()._thread.write().unwrap().push(thread::spawn(move || {
-			let tracerC = HTracer::singleton();
-			tracerC.internal_log(tmp, level, thisThreadId, file, line);
-		}));
-		thread::spawn(|| {
-			HTracer::threadPurge();
+		thread::spawn(move ||{
+			Self::singleton()._deferredLog.write().push(OneLog {
+				message: tmp,
+				date: Local::now(),
+				level,
+				threadId: thisThreadId,
+				filename: file,
+				fileline: line
+			});
+			
+			let thread = Self::singleton()._writingRun.load();
+			let mut isrunning = false;
+			if let Some(x) = &*thread
+			{
+				isrunning = !x.is_finished()
+			}
+			
+			if !isrunning
+			{
+				let thread = thread::spawn(||{
+					Self::singleton().internal_writestuff();
+				});
+				Self::singleton()._writingRun.swap(Some(Arc::new(thread)));
+			}
 		});
 	}
 	
@@ -130,14 +154,6 @@ impl HTracer
 	/// sync all remaining thread and launch "OnExit" event of modules
 	pub fn drop()
 	{
-		HTracer::singleton()._thread.write().unwrap().drain(..).for_each(|x|
-			{
-				if(!x.is_finished())
-				{
-					x.join().unwrap();
-				}
-			});
-		
 		for thismodule in HTracer::singleton()._modules.iter()
 		{
 			if let Some(tmp) = thismodule.get(&0)
@@ -145,20 +161,35 @@ impl HTracer
 				tmp.Event_onExit();
 			}
 		}
+		
+		Self::singleton().internal_writestuff();
 	}
 	
 	/// set a name for a thread, this is just visual
-	pub fn threadSetName(name: &str)
+	pub fn threadSetName(name: impl Into<String>)
 	{
-		HTracer::singleton()._threadNames.insert(HTracer::getThread(),name.to_string());
+		HTracer::singleton()._threadNames.insert(HTracer::getThread(),name.into());
 	}
 	
 	pub fn threadGetName(id: u64) -> String
 	{
 		return match HTracer::singleton()._threadNames.get(&id) {
 			None => id.to_string(),
-			Some(x) => x.value().to_string()
+			Some(x) => x.value().clone()
 		};
+	}
+	
+	pub fn minlvl_default(minlvl: Type)
+	{
+		Self::singleton()._minlvl.swap(Arc::new(minlvl.tou8()));
+		
+		let mut tracerC = HConfigManager::singleton().get("htrace");
+		if tracerC.get("minlvl").is_none()
+		{
+			tracerC.set("minlvl",minlvl.tou8());
+			let _ = tracerC.save();
+		}
+		
 	}
 	
 	//////////// PRIVATE ///////////
@@ -197,17 +228,8 @@ impl HTracer
 	}
 	
 	//// PRIVATE ////
-	fn internal_log(&self, tmp : String, level: Type, thisThreadId:u64, file: String, line: u32)
+	fn internal_log(&self, log : OneLog)
 	{
-		let log = OneLog {
-			message: tmp,
-			date: Local::now(),
-			level,
-			threadId: thisThreadId,
-			filename: file,
-			fileline: line
-		};
-		
 		for thismodule in self._modules.iter()
 		{
 			if let Some(tmp) = thismodule.get(&0)
@@ -215,23 +237,22 @@ impl HTracer
 				Type::launchModuleFunc(tmp,log.clone());
 			}
 			
-			if let Some(tmp) = thismodule.get(&thisThreadId)
+			if let Some(tmp) = thismodule.get(&log.threadId)
 			{
 				Type::launchModuleFunc(tmp,log.clone());
 			}
 		}
-		
-		//Type::launchModuleFunc(&self._module_file,log);
 	}
 	
-	fn threadPurge()
+	fn internal_writestuff(&self)
 	{
-		HTracer::singleton()._thread.write().unwrap().retain_mut(|i|{
-			!i.is_finished()
-		});
+		let mut binding = Self::singleton()._deferredLog.write();
+		let getWritingStuff = binding.drain(0..).collect::<Vec<_>>();
+		
+		for x in getWritingStuff {
+			HTracer::singleton().internal_log(x);
+		}
 	}
-	
-	
 }
 
 /* ---- for specialization / chalk ?

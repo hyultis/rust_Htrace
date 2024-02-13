@@ -47,6 +47,21 @@ impl Type
 		}
 	}
 	
+	pub fn tou8(&self) -> u8
+	{
+		match *self
+		{
+			Type::DEBUG => 0,
+			Type::NOTICE => 1,
+			Type::NORMAL => 2,
+			Type::NOTICEDERR => 3,
+			Type::WARNING => 4,
+			Type::DEBUGERR => 5,
+			Type::ERROR => 5,
+			Type::FATAL => 6,
+		}
+	}
+	
 	pub fn launchModuleFunc(module: &Box<dyn ModuleAbstract + Send + Sync>, onelog: OneLog)
 	{
 		match onelog.level
@@ -69,5 +84,22 @@ impl fmt::Display for Type {
 		// write! macro is expecting. Note that this formatting ignores the
 		// various flags provided to format strings.
 		write!(f, "{:<4}", self.convert4LengthString())
+	}
+}
+
+impl From<u8> for Type
+{
+	fn from(value: u8) -> Self {
+		match value
+		{
+			0 => Type::DEBUG,
+			1 => Type::NOTICE,
+			2 => Type::NORMAL,
+			3 => Type::NOTICEDERR,
+			4 => Type::WARNING,
+			5 => Type::ERROR,
+			6 => Type::FATAL ,
+			_ => Type::DEBUG
+		}
 	}
 }

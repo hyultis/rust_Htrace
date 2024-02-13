@@ -106,3 +106,30 @@ macro_rules! HTraceError
 		}
     };
 }
+
+/// spawn a thread with a specific name "{filename}_{line}" by default, or a string on the first argument
+/// automatically set threadSetName inside
+#[macro_export]
+macro_rules! TSpawner
+{
+	($a:expr) => {
+		{
+			let filename = file!();
+			let filename = filename.split('/').last().unwrap_or(filename);
+			let name = format!("{}/{}",filename,line!());
+		    std::thread::Builder::new().name(name.clone()).spawn(move ||{
+				$crate::HTracer::HTracer::threadSetName(name);
+				$a()
+			})
+		}
+    };
+	($b:expr,$a:expr) => {
+		{
+			let name = $b.to_string();
+		    std::thread::Builder::new().name(name.clone()).spawn(move ||{
+				$crate::HTracer::HTracer::threadSetName(name);
+				$a()
+			})
+		}
+    };
+}
