@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 chrono = "0.4.21"
 anyhow = "1.0.51"
-Hconfig = { path = "../Hconfig" }
+Hconfig = {git="ssh://git@github.com/hyultis/rust_Hconfig.git", branch = "master"}
 backtrace = "0.3.67"
 json = "0.12.4"
 dashmap = "5.4.0"
