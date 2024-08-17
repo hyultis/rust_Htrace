@@ -9,12 +9,14 @@ use crate::Type::Type;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 use std::thread;
-use std::thread::JoinHandle;
-use arc_swap::{ArcSwap, ArcSwapOption};
+use std::time::Duration;
+use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use Hconfig::HConfigManager::HConfigManager;
-use json::JsonValue;
+use Hconfig::rusty_json::base::{JsonObject, JsonValue};
 use parking_lot::{RwLock};
+use singletonThread::SingletonThread;
+use crate::backtrace::Hbacktrace;
 use crate::Errors;
 
 pub struct HTracer
@@ -23,7 +25,8 @@ pub struct HTracer
 	_deferredLog: RwLock<Vec<OneLog>>,
 	_threadNames: DashMap<u64,String>,
 	_minlvl: ArcSwap<u8>,
-	_writingRun: ArcSwapOption<JoinHandle<()>>
+	_threadWriting: RwLock<SingletonThread>,
+	_somethingIsWriting: ArcSwap<u64>
 }
 
 static SINGLETON: OnceLock<HTracer> = OnceLock::new();
@@ -34,12 +37,18 @@ impl HTracer
 		let tmp = DashMap::new();
 		tmp.insert(0,"main".to_string());
 		
+		let mut thread = SingletonThread::new(||{
+			Self::singleton().internal_writestuff();
+		});
+		thread.setDuration(Duration::from_nanos(1));
+		
 		return HTracer {
 			_modules: DashMap::new(),
 			_deferredLog: RwLock::new(vec![]),
 			_threadNames: tmp,
 			_minlvl: ArcSwap::new(Arc::new(0)),
-			_writingRun: ArcSwapOption::new(None),
+			_threadWriting: RwLock::new(thread),
+			_somethingIsWriting: ArcSwap::new(Arc::new(0)),
 		};
 	}
 	
@@ -62,7 +71,7 @@ impl HTracer
 		let modulename = modulename.to_string();
 		let modulepath = format!("module/{}",modulename);
 		let mut tracerC = HConfigManager::singleton().get("htrace");
-		tracerC.getOrSetDefault(modulepath.as_str(),JsonValue::new_object());
+		tracerC.getOrSetDefault(modulepath.as_str(),JsonValue::Object(JsonObject::new()));
 		
 		let mut tmp = Ok(());
 		if let Some(node) = tracerC.get_mut(modulepath.as_str())
@@ -92,29 +101,35 @@ impl HTracer
 	pub fn log<T>(rawEntry : &T, level: Type, file: &str, line: u32)
 		where T: Any + Debug // + ?Display
 	{
+		Self::logWithBacktrace(rawEntry,level,file,line,vec![]);
+	}
+	
+	pub fn logWithBacktrace<T>(rawEntry : &T, level: Type, file: &str, line: u32, backtraces: Vec<Hbacktrace>)
+		where T: Any + Debug // + ?Display
+	{
+		let tmp = Self::singleton()._somethingIsWriting.load();
+		Self::singleton()._somethingIsWriting.swap(Arc::new(**tmp + 1));
+		
 		let anyEntry = rawEntry as &dyn Any;
-		let tmp = match anyEntry.downcast_ref::<String>() {
-			None => {
-				match anyEntry.downcast_ref::<&str>()
-				{
-					None => {
-						match anyEntry.downcast_ref::<Box<dyn Display>>() {
-							None => {
-								format!("{:?}", rawEntry)
-							}
-							Some(content) => {
-								
-								format!("{}", content)
-							}
-						}
-					}
-					Some(content) => {
-						content.to_string()
-					}
-				}
-			}
-			Some(content) => {
+		let tmp = if let Some(content) = anyEntry.downcast_ref::<String>() {
+			content.to_string()
+		}
+		else
+		{
+			if let Some(content) = anyEntry.downcast_ref::<&str>()
+			{
 				content.to_string()
+			}
+			else
+			{
+				if let Some(content)= anyEntry.downcast_ref::<Box<dyn Display>>()
+				{
+					format!("{}", content)
+				}
+				else
+				{
+					format!("{:?}", rawEntry)
+				}
 			}
 		};
 		
@@ -122,38 +137,36 @@ impl HTracer
 		let tmp: String = tmp.into();*/
 		let file = file.to_string();
 		let thisThreadId = HTracer::getThread();
+		let time = Local::now();
 		
 		thread::spawn(move ||{
 			Self::singleton()._deferredLog.write().push(OneLog {
 				message: tmp,
-				date: Local::now(),
+				date: time,
 				level,
 				threadId: thisThreadId,
 				filename: file,
-				fileline: line
+				fileline: line,
+				backtraces,
 			});
 			
-			let thread = Self::singleton()._writingRun.load();
-			let mut isrunning = false;
-			if let Some(x) = &*thread
-			{
-				isrunning = !x.is_finished()
-			}
+			let tmp = Self::singleton()._somethingIsWriting.load();
+			Self::singleton()._somethingIsWriting.swap(Arc::new(tmp.saturating_sub(1)));
 			
-			if !isrunning
-			{
-				let thread = thread::spawn(||{
-					Self::singleton().internal_writestuff();
-				});
-				Self::singleton()._writingRun.swap(Some(Arc::new(thread)));
-			}
+			Self::singleton()._threadWriting.write().thread_launch();
 		});
+		
 	}
 	
 	/// need to be call before the app exit.
 	/// sync all remaining thread and launch "OnExit" event of modules
 	pub fn drop()
 	{
+		if(**Self::singleton()._somethingIsWriting.load()>0)
+		{
+			thread::sleep(Duration::from_secs(1));
+		}
+		
 		for thismodule in HTracer::singleton()._modules.iter()
 		{
 			if let Some(tmp) = thismodule.get(&0)
@@ -192,9 +205,57 @@ impl HTracer
 		
 	}
 	
+	pub fn backtrace() -> Vec<Hbacktrace>
+	{
+		let mut internal = true;
+		let mut returning = Vec::new();
+		backtrace::trace(|x|{
+			let mut name = "".to_string();
+			let mut filename = "".to_string();
+			let mut line = 0;
+			let mut solvable = false;
+			
+			backtrace::resolve_frame(x, |symbol| {
+				if let Some(inname) = symbol.name()
+				{
+					if let Some((splitted,_)) = inname.to_string().rsplit_once("::")
+					{
+						solvable = true;
+						name = format!("{}()",splitted);
+					}
+				}
+				if let Some(infilename) = symbol.filename()
+				{
+					filename = infilename.to_str().unwrap_or_default().to_string();
+				}
+				if let Some(inline) = symbol.lineno()
+				{
+					line = inline;
+				}
+			});
+			
+			if(name.eq("Htrace::HTracer::HTracer::backtrace()"))
+			{
+				internal = false;
+			}
+			else if !internal && solvable
+			{
+				returning.push(Hbacktrace{
+					funcName: name,
+					fileName: filename,
+					line,
+				});
+			}
+			true
+		});
+		
+		
+		return returning;
+	}
+	
 	//////////// PRIVATE ///////////
 	
-	fn getBacktraceInfos(resolvedSymbol: &mut String, resolvedFile: &mut String, resolvedFileLine: &mut u32)
+	/*fn getBacktraceInfos(resolvedSymbol: &mut String, resolvedFile: &mut String, resolvedFileLine: &mut u32)
 	{
 		backtrace::trace(|thisframe|
 			{
@@ -225,7 +286,7 @@ impl HTracer
 				
 				nextframe
 			});
-	}
+	}*/
 	
 	//// PRIVATE ////
 	fn internal_log(&self, log : OneLog)
@@ -234,12 +295,12 @@ impl HTracer
 		{
 			if let Some(tmp) = thismodule.get(&0)
 			{
-				Type::launchModuleFunc(tmp,log.clone());
+				Type::launchModuleFunc(tmp,&log);
 			}
 			
 			if let Some(tmp) = thismodule.get(&log.threadId)
 			{
-				Type::launchModuleFunc(tmp,log.clone());
+				Type::launchModuleFunc(tmp,&log);
 			}
 		}
 	}

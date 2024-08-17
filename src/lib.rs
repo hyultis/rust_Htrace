@@ -10,6 +10,7 @@ pub mod CommandLine;
 pub mod ModuleAbstract;
 pub mod Type;
 mod OneLog;
+pub mod backtrace;
 
 use thiserror::Error;
 
@@ -26,7 +27,7 @@ pub enum Errors
 /// can be use like that :
 /// ```
 /// use Htrace::HTrace;
-/// use Htrace::Type;
+/// use Htrace::Type::Type;
 ///
 /// let myvar = 42;
 /// HTrace!(myvar);
@@ -44,13 +45,27 @@ macro_rules! HTrace
 	    $crate::HTracer::HTracer::log(&$a, $crate::Type::Type::NORMAL, file!(), line!())
     };
 	(($b:expr) $a:expr) => {
-	    $crate::HTracer::HTracer::log(&$a, $b, file!(), line!())
+		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+		{
+	        $crate::HTracer::HTracer::logWithBacktrace(&$a, $b, file!(), line!(),backtrace!());
+		}
+		else
+		{
+	        $crate::HTracer::HTracer::log(&$a, $b, file!(), line!());
+		}
     };
 	($a:expr $(,$arg:expr)*) => {
 	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $crate::Type::Type::NORMAL, file!(), line!())
     };
 	(($b:expr) $a:expr $(,$arg:expr)*) => {
-	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $b, file!(), line!())
+		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+		{
+	        $crate::HTracer::HTracer::logWithBacktrace(&format!($a,$($arg),*), $b, file!(), line!(),backtrace!())
+		}
+		else
+		{
+	        $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $b, file!(), line!())
+		}
     };
 }
 
@@ -61,7 +76,7 @@ macro_rules! HTrace
 /// can be use like that :
 /// ```
 /// use Htrace::HTraceError;
-/// use Htrace::Type;
+/// use Htrace::Type::Type;
 ///
 /// let testerror = std::fs::File::open(std::path::Path::new("idontexist.muahahah"));
 /// HTraceError!(testerror);
@@ -77,7 +92,7 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!())
+	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!(),backtrace!())
 			}
 		}
     };
@@ -85,7 +100,7 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!())
+	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!(),backtrace!())
 			}
 		}
     };
@@ -93,7 +108,14 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $b, file!(), line!())
+				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+				{
+			        $crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $b, file!(), line!(),backtrace!())
+				}
+				else
+				{
+			        $crate::HTracer::HTracer::log(&errorToTrace.to_string(), $b, file!(), line!())
+				}
 			}
 		}
     };
@@ -101,7 +123,14 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $b, file!(), line!())
+				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+				{
+			        $crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $b, file!(), line!(),backtrace!())
+				}
+				else
+				{
+			        $crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $b, file!(), line!())
+				}
 			}
 		}
     };
@@ -110,7 +139,7 @@ macro_rules! HTraceError
 /// spawn a thread with a specific name "{filename}_{line}" by default, or a string on the first argument
 /// automatically set threadSetName inside
 #[macro_export]
-macro_rules! TSpawner
+macro_rules! namedThread
 {
 	($a:expr) => {
 		{
@@ -132,4 +161,13 @@ macro_rules! TSpawner
 			})
 		}
     };
+}
+
+/// generate forced backtrace, it take some time
+#[macro_export]
+macro_rules! backtrace
+{
+	() => {
+		$crate::HTracer::HTracer::backtrace();
+	};
 }

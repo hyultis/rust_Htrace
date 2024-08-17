@@ -5,7 +5,7 @@ use std::path::Path;
 use Hconfig::HConfigManager::HConfigManager;
 use Htrace::HTracer::HTracer;
 use Htrace::Type::Type;
-use Htrace::{HTrace, CommandLine, File, HTraceError};
+use Htrace::{HTrace, CommandLine, File, HTraceError, backtrace};
 use Htrace::CommandLine::CommandLineConfig;
 use Htrace::File::FileConfig;
 
@@ -34,6 +34,8 @@ fn log() {
 	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
 	HTraceError!((Type::FATAL) testerror);
 	HTraceError!((Type::FATAL) "File error is : {}",testerror);
+	
+	backtrace!();
 	
 	HTracer::drop(); // cannot be put in "Drop" because of OnceCell
 }

@@ -3,10 +3,10 @@ use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use anyhow::Result;
-use json::JsonValue;
+use Hconfig::rusty_json::base::JsonValue;
 use strfmt::strfmt;
 use crate::HTracer::HTracer;
-use crate::ModuleAbstract::ModuleAbstract;
+use crate::ModuleAbstract::{ModuleAbstract, setConfig_boolean, setConfig_String};
 use crate::OneLog::OneLog;
 
 pub struct FileConfig
@@ -54,7 +54,7 @@ impl File
 		};
 	}
 	
-	fn generateLine(&self, log: OneLog)
+	fn generateLine(&self, log: &OneLog)
 	{
 		let mut msg = log.message.clone();
 		if(msg.contains("\n") || msg.contains("\r") || msg.contains("\\n") || msg.contains("\\r"))
@@ -68,6 +68,16 @@ impl File
 			msg = msg.replace("\n",linereturn.as_str());
 		}
 		
+		if(log.backtraces.len()>0)
+		{
+			let mut drawBacktraces= "".to_string();
+			log.backtraces.iter().for_each(|one|{
+				drawBacktraces = format!("{}\n | {}",drawBacktraces,one.to_string());
+			});
+			
+			msg = format!("{}, with : {}",msg,drawBacktraces)
+		}
+		
 		let mut filedateformat = "%Y%m%d";
 		if(self._configs.byHour)
 		{
@@ -75,7 +85,7 @@ impl File
 		}
 		
 		let mut vars = HashMap::new();
-		vars.insert("time".to_string(),log.date.format("%H:%M:%S%.9f").to_string());
+		vars.insert("time".to_string(),log.date.format("%H:%M:%S%.6f").to_string());
 		vars.insert("lvl".to_string(),log.level.convert4LengthString());
 		vars.insert("file".to_string(),log.filename.clone());
 		vars.insert("line".to_string(),log.fileline.to_string());
@@ -126,6 +136,7 @@ impl File
 		
 		let _iswrited = Rfile.write(format!("{}\n",lineToWrite).as_bytes());
 	}
+	
 }
 
 
@@ -142,40 +153,18 @@ impl ModuleAbstract for File
 	
 	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
 	{
-		if(!configs.has_key("path"))
-		{
-			configs["path"] = JsonValue::String(self._configs.path.to_string());
-		}
-		else
-		{
-			self._configs.path = configs["path"].to_string();
-		}
+		let JsonValue::Object(config) = configs else {return Ok(())};
+		setConfig_String(config,"path",&mut self._configs.path, |_|true);
+		setConfig_String(config,"lineReturn",&mut self._configs.lineReturn, |_|true);
+		setConfig_String(config,"lineFormat",&mut self._configs.lineFormat, |_|true);
+		setConfig_boolean(config,"byHour",&mut self._configs.byHour);
+		setConfig_boolean(config,"bySrc",&mut self._configs.bySrc);
+		setConfig_boolean(config,"byThreadId",&mut self._configs.byThreadId);
 		
-		if(!configs.has_key("lineReturn"))
-		{
-			configs["lineReturn"] = JsonValue::String(self._configs.lineReturn.to_string());
-		}
-		else
-		{
-			self._configs.lineReturn = configs["lineReturn"].to_string();
-		}
 		
-		if(!configs.has_key("lineFormat"))
+		if let Some(val) = config.get("forceInOneFile")
 		{
-			configs["lineFormat"] = JsonValue::String(self._configs.lineFormat.to_string());
-		}
-		else
-		{
-			self._configs.lineFormat = configs["lineFormat"].to_string();
-		}
-		
-		if(!configs.has_key("forceInOneFile"))
-		{
-			configs["forceInOneFile"] = JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string()));
-		}
-		else
-		{
-			let tmp = configs["forceInOneFile"].to_string();
+			let Ok(tmp) = val.parse() else {return Ok(())};
 			if(tmp == "")
 			{
 				self._configs.forceInOneFile = None;
@@ -185,73 +174,50 @@ impl ModuleAbstract for File
 				self._configs.forceInOneFile = Some(tmp);
 			}
 		}
-		
-		if(!configs.has_key("byHour"))
-		{
-			configs["byHour"] = JsonValue::Boolean(self._configs.byHour);
-		}
 		else
 		{
-			self._configs.byHour = configs["byHour"].as_bool().unwrap_or(false);
-		}
-		
-		if(!configs.has_key("bySrc"))
-		{
-			configs["bySrc"] = JsonValue::Boolean(self._configs.bySrc);
-		}
-		else
-		{
-			self._configs.bySrc = configs["bySrc"].as_bool().unwrap_or(false);
-		}
-		
-		if(!configs.has_key("byThreadId"))
-		{
-			configs["byThreadId"] = JsonValue::Boolean(self._configs.byThreadId);
-		}
-		else
-		{
-			self._configs.byThreadId = configs["byThreadId"].as_bool().unwrap_or(true);
+			config.set("forceInOneFile", JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string())));
 		}
 		
 		Ok(())
 	}
 	
-	fn Event_onDebug(&self, log: OneLog)
+	fn Event_onDebug(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onDebugErr(&self, log: OneLog)
+	fn Event_onDebugErr(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onNormal(&self, log: OneLog)
+	fn Event_onNormal(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onNotice(&self, log: OneLog)
+	fn Event_onNotice(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onNoticeErr(&self, log: OneLog)
+	fn Event_onNoticeErr(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onWarning(&self, log: OneLog)
+	fn Event_onWarning(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onError(&self, log: OneLog)
+	fn Event_onError(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}
 	
-	fn Event_onFatal(&self, log: OneLog)
+	fn Event_onFatal(&self, log: &OneLog)
 	{
 		self.generateLine(log);
 	}

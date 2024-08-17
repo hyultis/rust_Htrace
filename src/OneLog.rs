@@ -1,8 +1,8 @@
 
 use chrono::{Local};
+use crate::backtrace::Hbacktrace;
 use crate::Type::Type;
 
-#[derive(Clone)]
 pub struct OneLog
 {
 	pub message: String,
@@ -10,5 +10,6 @@ pub struct OneLog
 	pub level: Type,
 	pub threadId: u64,
 	pub filename: String,
-	pub fileline: u32
+	pub fileline: u32,
+	pub backtraces: Vec<Hbacktrace>
 }

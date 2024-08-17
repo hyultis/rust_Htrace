@@ -7,13 +7,14 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = "0.4.21"
-anyhow = "1.0.51"
-Hconfig = {git="ssh://git@github.com/hyultis/rust_Hconfig.git", branch = "master"}
-backtrace = "0.3.67"
-json = "0.12.4"
-dashmap = "5.4.0"
-thiserror = "1.0.40"
+chrono = "0.4.38"
+anyhow = "1.0.86"
+Hconfig = "1.0.0"
+backtrace = "0.3.73"
+dashmap = "6.0.1"
+thiserror = "1.0.63"
 strfmt = "0.2.4"
-arc-swap = "1.6.0"
-parking_lot = "0.12.1"
+arc-swap = "1.7.1"
+parking_lot = "0.12.3"
+singletonThread = "1.0.0"
+owo-colors = "4.0.0"

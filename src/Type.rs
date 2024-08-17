@@ -52,17 +52,17 @@ impl Type
 		match *self
 		{
 			Type::DEBUG => 0,
-			Type::NOTICE => 1,
-			Type::NORMAL => 2,
-			Type::NOTICEDERR => 3,
+			Type::NORMAL => 1,
+			Type::NOTICE => 2,
+			Type::DEBUGERR => 3,
 			Type::WARNING => 4,
-			Type::DEBUGERR => 5,
-			Type::ERROR => 5,
-			Type::FATAL => 6,
+			Type::NOTICEDERR => 5,
+			Type::ERROR => 6,
+			Type::FATAL => 7,
 		}
 	}
 	
-	pub fn launchModuleFunc(module: &Box<dyn ModuleAbstract + Send + Sync>, onelog: OneLog)
+	pub fn launchModuleFunc(module: &Box<dyn ModuleAbstract + Send + Sync>, onelog: &OneLog)
 	{
 		match onelog.level
 		{
