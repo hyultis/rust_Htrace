@@ -1,7 +1,7 @@
 [package]
 name = "Htrace"
 version = "1.0.0"
-authors = ["Hyultis <hyultis@use.startmail.com>"]
+authors = ["Hyultis <hyultis@gmail.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
