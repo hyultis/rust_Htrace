@@ -1,13 +1,14 @@
 use crate::OneLog::OneLog;
 use anyhow::Result;
-use Hconfig::rusty_json::base::{JsonObject, JsonValue};
+use Hconfig::serde_json;
+use Hconfig::serde_json::Value;
 
 pub trait ModuleAbstract: Sync + Send
 {
 	fn setModuleName(&mut self,moduleName: String) -> Result<()>;
 	fn getModuleName(&self) -> Result<String>;
 	
-	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>;
+	fn setConfig(&mut self, configs: &mut Value) -> Result<()>;
 	
 	fn Event_onDebug(&self, log: &OneLog);
 	fn Event_onDebugErr(&self, log: &OneLog);
@@ -22,31 +23,31 @@ pub trait ModuleAbstract: Sync + Send
 }
 
 
-pub fn setConfig_String(config: &mut JsonObject, key: &str, val: &mut String, cond: impl Fn(&String)->bool)
+pub fn setConfig_String(config: &mut serde_json::Map<String,Value>, key: &str, val: &mut String, cond: impl Fn(&str)->bool)
 {
 	if let Some(path) = config.get(key)
 	{
-		if let Ok(tmp) = path.parse()
+		if let Some(tmp) = path.as_str()
 		{
 			if(cond(&tmp))
 			{
-				*val = tmp;
+				*val = tmp.to_string();
 				return;
 			}
 		}
 	}
-	config.set(key, JsonValue::String(val.clone()));
+	config.insert(key.to_string(), Value::String(val.clone()));
 }
 
-pub fn setConfig_boolean(config: &mut JsonObject, key: &str, val: &mut bool)
+pub fn setConfig_boolean(config: &mut serde_json::Map<String,Value>, key: &str, val: &mut bool)
 {
 	if let Some(path) = config.get(key)
 	{
-		if let Ok(tmp) = path.parse()
+		if let Some(tmp) = path.as_bool()
 		{
 			*val = tmp;
 			return;
 		}
 	}
-	config.set(key, JsonValue::Boolean(*val));
+	config.insert(key.to_string(), Value::Bool(*val));
 }

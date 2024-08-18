@@ -1,20 +1,26 @@
 [package]
 name = "Htrace"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Hyultis <hyultis@use.startmail.com>"]
-edition = "2018"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/hyultis/rust_Hconfig"
+keywords = ["tracing","trace","log","logging"]
+categories = ["development-tools::debugging"]
+description = "simple tracing system"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = "0.4.38"
-anyhow = "1.0.86"
-Hconfig = "1.0.0"
-backtrace = "0.3.73"
-dashmap = "6.0.1"
-thiserror = "1.0.63"
-strfmt = "0.2.4"
-arc-swap = "1.7.1"
-parking_lot = "0.12.3"
-singletonThread = "1.0.0"
-owo-colors = "4.0.0"
+chrono = "0.4"
+anyhow = "1.0"
+Hconfig = "1.1"
+backtrace = "0.3"
+dashmap = "6.0"
+thiserror = "1.0"
+strfmt = "0.2"
+arc-swap = "1.7"
+parking_lot = "0.12"
+singletonThread = "1.1"
+owo-colors = "4.0"

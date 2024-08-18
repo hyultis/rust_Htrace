@@ -3,7 +3,7 @@ use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 use anyhow::Result;
-use Hconfig::rusty_json::base::JsonValue;
+use Hconfig::serde_json::Value;
 use strfmt::strfmt;
 use crate::HTracer::HTracer;
 use crate::ModuleAbstract::{ModuleAbstract, setConfig_boolean, setConfig_String};
@@ -29,7 +29,7 @@ impl Default for FileConfig
 	fn default() -> Self {
 		return FileConfig{
 			path: "./traces".to_string(),
-			lineReturn: "|".to_string(),
+			lineReturn: " | ".to_string(),
 			lineFormat: "{time} {lvl} ({file}:l{line}) : {msg}".to_string(),
 			byThreadId: true,
 			bySrc: false,
@@ -72,7 +72,7 @@ impl File
 		{
 			let mut drawBacktraces= "".to_string();
 			log.backtraces.iter().for_each(|one|{
-				drawBacktraces = format!("{}\n | {}",drawBacktraces,one.to_string());
+				drawBacktraces = format!("{}\n{}{}",drawBacktraces,self._configs.lineReturn,one.to_string());
 			});
 			
 			msg = format!("{}, with : {}",msg,drawBacktraces)
@@ -151,9 +151,9 @@ impl ModuleAbstract for File
 		return Ok(self._name.clone());
 	}
 	
-	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
+	fn setConfig(&mut self, configs: &mut Value) -> Result<()>
 	{
-		let JsonValue::Object(config) = configs else {return Ok(())};
+		let Value::Object(config) = configs else {return Ok(())};
 		setConfig_String(config,"path",&mut self._configs.path, |_|true);
 		setConfig_String(config,"lineReturn",&mut self._configs.lineReturn, |_|true);
 		setConfig_String(config,"lineFormat",&mut self._configs.lineFormat, |_|true);
@@ -164,19 +164,19 @@ impl ModuleAbstract for File
 		
 		if let Some(val) = config.get("forceInOneFile")
 		{
-			let Ok(tmp) = val.parse() else {return Ok(())};
+			let Some(tmp) = val.as_str() else {return Ok(())};
 			if(tmp == "")
 			{
 				self._configs.forceInOneFile = None;
 			}
 			else
 			{
-				self._configs.forceInOneFile = Some(tmp);
+				self._configs.forceInOneFile = Some(tmp.to_string());
 			}
 		}
 		else
 		{
-			config.set("forceInOneFile", JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string())));
+			config.insert("forceInOneFile".to_string(), Value::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string())));
 		}
 		
 		Ok(())

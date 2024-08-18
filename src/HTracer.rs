@@ -13,7 +13,8 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 use Hconfig::HConfigManager::HConfigManager;
-use Hconfig::rusty_json::base::{JsonObject, JsonValue};
+use Hconfig::serde_json;
+use Hconfig::serde_json::Value;
 use parking_lot::{RwLock};
 use singletonThread::SingletonThread;
 use crate::backtrace::Hbacktrace;
@@ -25,8 +26,7 @@ pub struct HTracer
 	_deferredLog: RwLock<Vec<OneLog>>,
 	_threadNames: DashMap<u64,String>,
 	_minlvl: ArcSwap<u8>,
-	_threadWriting: RwLock<SingletonThread>,
-	_somethingIsWriting: ArcSwap<u64>
+	_threadWriting: RwLock<SingletonThread>
 }
 
 static SINGLETON: OnceLock<HTracer> = OnceLock::new();
@@ -48,7 +48,6 @@ impl HTracer
 			_threadNames: tmp,
 			_minlvl: ArcSwap::new(Arc::new(0)),
 			_threadWriting: RwLock::new(thread),
-			_somethingIsWriting: ArcSwap::new(Arc::new(0)),
 		};
 	}
 	
@@ -71,7 +70,7 @@ impl HTracer
 		let modulename = modulename.to_string();
 		let modulepath = format!("module/{}",modulename);
 		let mut tracerC = HConfigManager::singleton().get("htrace");
-		tracerC.getOrSetDefault(modulepath.as_str(),JsonValue::Object(JsonObject::new()));
+		tracerC.getOrSetDefault(modulepath.as_str(),Value::Object(serde_json::Map::new()));
 		
 		let mut tmp = Ok(());
 		if let Some(node) = tracerC.get_mut(modulepath.as_str())
@@ -107,9 +106,6 @@ impl HTracer
 	pub fn logWithBacktrace<T>(rawEntry : &T, level: Type, file: &str, line: u32, backtraces: Vec<Hbacktrace>)
 		where T: Any + Debug // + ?Display
 	{
-		let tmp = Self::singleton()._somethingIsWriting.load();
-		Self::singleton()._somethingIsWriting.swap(Arc::new(**tmp + 1));
-		
 		let anyEntry = rawEntry as &dyn Any;
 		let tmp = if let Some(content) = anyEntry.downcast_ref::<String>() {
 			content.to_string()
@@ -150,10 +146,7 @@ impl HTracer
 				backtraces,
 			});
 			
-			let tmp = Self::singleton()._somethingIsWriting.load();
-			Self::singleton()._somethingIsWriting.swap(Arc::new(tmp.saturating_sub(1)));
-			
-			Self::singleton()._threadWriting.write().thread_launch();
+			Self::singleton()._threadWriting.write().thread_launch_delayabe();
 		});
 		
 	}
@@ -162,10 +155,7 @@ impl HTracer
 	/// sync all remaining thread and launch "OnExit" event of modules
 	pub fn drop()
 	{
-		if(**Self::singleton()._somethingIsWriting.load()>0)
-		{
-			thread::sleep(Duration::from_secs(1));
-		}
+		thread::sleep(Duration::from_secs(1));
 		
 		for thismodule in HTracer::singleton()._modules.iter()
 		{

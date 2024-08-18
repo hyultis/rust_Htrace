@@ -47,7 +47,7 @@ macro_rules! HTrace
 	(($b:expr) $a:expr) => {
 		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
 		{
-	        $crate::HTracer::HTracer::logWithBacktrace(&$a, $b, file!(), line!(),backtrace!());
+	        $crate::HTracer::HTracer::logWithBacktrace(&$a, $b, file!(), line!(),$crate::backtrace!());
 		}
 		else
 		{
@@ -60,7 +60,7 @@ macro_rules! HTrace
 	(($b:expr) $a:expr $(,$arg:expr)*) => {
 		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
 		{
-	        $crate::HTracer::HTracer::logWithBacktrace(&format!($a,$($arg),*), $b, file!(), line!(),backtrace!())
+	        $crate::HTracer::HTracer::logWithBacktrace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::backtrace!())
 		}
 		else
 		{
@@ -92,7 +92,7 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!(),backtrace!())
+	    		$crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!(), $crate::backtrace!())
 			}
 		}
     };
@@ -100,7 +100,7 @@ macro_rules! HTraceError
 		match $a {
 			Ok(_) => {}
 			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!(),backtrace!())
+	    		$crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!(), $crate::backtrace!())
 			}
 		}
     };
@@ -110,7 +110,7 @@ macro_rules! HTraceError
 			Err(ref errorToTrace) => {
 				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
 				{
-			        $crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $b, file!(), line!(),backtrace!())
+			        $crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $b, file!(), line!(), $crate::backtrace!())
 				}
 				else
 				{
@@ -125,7 +125,7 @@ macro_rules! HTraceError
 			Err(ref errorToTrace) => {
 				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
 				{
-			        $crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $b, file!(), line!(),backtrace!())
+			        $crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $b, file!(), line!(), $crate::backtrace!())
 				}
 				else
 				{

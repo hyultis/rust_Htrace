@@ -52,11 +52,11 @@ impl Type
 		match *self
 		{
 			Type::DEBUG => 0,
-			Type::NORMAL => 1,
-			Type::NOTICE => 2,
-			Type::DEBUGERR => 3,
-			Type::WARNING => 4,
-			Type::NOTICEDERR => 5,
+			Type::DEBUGERR => 1,
+			Type::NORMAL => 2,
+			Type::NOTICE => 3,
+			Type::NOTICEDERR => 4,
+			Type::WARNING => 5,
 			Type::ERROR => 6,
 			Type::FATAL => 7,
 		}

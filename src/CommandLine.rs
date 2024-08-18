@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use crate::ModuleAbstract::{ModuleAbstract, setConfig_String};
 use crate::OneLog::OneLog;
 use anyhow::Result;
-use Hconfig::rusty_json::base::JsonValue;
+use Hconfig::serde_json::Value;
 use owo_colors::{OwoColorize, Style};
 use strfmt::strfmt;
 use crate::Type::Type;
@@ -29,7 +29,7 @@ impl Default for CommandLineConfig
 		
 		return CommandLineConfig{
 			colors,
-			lineReturn: "|".to_string(),
+			lineReturn: " | ".to_string(),
 			lineFormat: "{time} {lvl} ({file}:l{line}) : {msg}".to_string(),
 		};
 	}
@@ -68,7 +68,7 @@ impl CommandLine
 		{
 			let mut drawBacktraces= "".to_string();
 			log.backtraces.iter().for_each(|one|{
-				drawBacktraces = format!("{}\n | {}",drawBacktraces,one.to_string());
+				drawBacktraces = format!("{}\n{}{}",drawBacktraces,self._configs.lineReturn,one.to_string());
 			});
 			
 			msg = format!("{}, with : {}",msg,drawBacktraces)
@@ -107,19 +107,19 @@ impl ModuleAbstract for CommandLine
 		return Ok(self._name.clone());
 	}
 	
-	fn setConfig(&mut self, configs: &mut JsonValue) -> Result<()>
+	fn setConfig(&mut self, configs: &mut Value) -> Result<()>
 	{
-		let JsonValue::Object(config) = configs else { return Ok(()) };
+		let Value::Object(config) = configs else { return Ok(()) };
 		
 		/* removed until good way to save style internal stuff
 		if (!config.contains_key("colors"))
 		{
-			config.set("colors", JsonValue::Object(JsonObject::new()));
+			config.set("colors", Value::Object(JsonObject::new()));
 		}
 		
 		if let Some(colorsCase) = config.get_mut("colors")
 		{
-			if let JsonValue::Array(colorArray) = colorsCase
+			if let Value::Array(colorArray) = colorsCase
 			{
 				let allcolor = [Type::DEBUG,
 					Type::DEBUGERR,
@@ -144,7 +144,7 @@ impl ModuleAbstract for CommandLine
 					{
 						let tmp = Style::new();
 						println!("{}",serde_json::to_string(&tmp).unwrap());
-						colorArray.insert(i as usize, JsonValue::String(self._configs.colors.get(&i).unwrap_or(&Style::new()).clone()));
+						colorArray.insert(i as usize, Value::String(self._configs.colors.get(&i).unwrap_or(&Style::new()).clone()));
 					}
 				}
 			}
