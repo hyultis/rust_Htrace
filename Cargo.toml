@@ -1,11 +1,11 @@
 [package]
 name = "Htrace"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Hyultis <hyultis@gmail.com>"]
 edition = "2021"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/hyultis/rust_Hconfig"
+repository = "https://github.com/hyultis/rust_Htrace"
 keywords = ["tracing","trace","log","logging"]
 categories = ["development-tools::debugging"]
 description = "simple tracing system"
