@@ -155,7 +155,7 @@ impl HTracer
 	/// sync all remaining thread and launch "OnExit" event of modules
 	pub fn drop()
 	{
-		thread::sleep(Duration::from_secs(1));
+		thread::sleep(Duration::from_millis(10));
 		
 		for thismodule in HTracer::singleton()._modules.iter()
 		{
