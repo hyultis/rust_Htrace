@@ -1,8 +1,8 @@
 [package]
 name = "Htrace"
-version = "1.0.2"
+version = "2.0.0"
 authors = ["Hyultis <hyultis@gmail.com>"]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/hyultis/rust_Htrace"
@@ -13,14 +13,14 @@ description = "simple tracing system"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-chrono = "0.4"
+time = { version="0.3" , features = ["macros","formatting"]}
 anyhow = "1.0"
-Hconfig = "1.1"
+#Hconfig = "1.1"
+Hconfig = {  path="../Hconfig" }
 backtrace = "0.3"
-dashmap = "6.0"
-thiserror = "1.0"
-strfmt = "0.2"
+dashmap = "7.0.0-rc2"
+thiserror = "2.0"
 arc-swap = "1.7"
 parking_lot = "0.12"
 singletonThread = "1.1"
-owo-colors = "4.1"
+owo-colors = "4.2"
