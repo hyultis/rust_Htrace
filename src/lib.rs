@@ -48,12 +48,10 @@ macro_rules! HTrace
 	(($b:expr) $a:expr) => {
 		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
 		{
-			println!("here");
 	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(),$crate::htracer::HTracer::backtrace());
 		}
 		else
 		{
-			println!("prout");
 	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(), vec![]);
 		}
     };

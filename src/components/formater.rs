@@ -97,8 +97,6 @@ pub fn FormaterCompile(formater: &String) -> FormaterCompiled
 
 	compiled.push((formater[lastchar..].to_string(), None));
 
-	println!("compiled {:?}",compiled);
-
 	return FormaterCompiled{ inner: compiled };
 }
 
