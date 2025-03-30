@@ -5,7 +5,7 @@ use anyhow::Result;
 use Hconfig::tinyjson::JsonValue;
 use owo_colors::{OwoColorize, Style};
 use crate::components::context::Context;
-use crate::components::formater::{FormaterBuilderSignature, FormaterSignature, HtraceDefaultFormater, HtraceDefaultFormaterBuilder};
+use crate::components::formater::{FormaterParamBuilderSignature, FormaterCompilerSignature, FormaterParamBuilder, FormaterCompile, FormaterCompiled};
 use crate::components::level::Level;
 use crate::modules::utils::setConfig_String;
 
@@ -18,9 +18,9 @@ pub struct CommandLineConfig
 	/// format of the trace, view HtraceDefaultFormater for available variable
 	pub lineFormat: String,
 	/// define the way to collect data (using lineReturn)
-	pub formaterBuilder: FormaterBuilderSignature,
+	pub formaterParamBuilder: FormaterParamBuilderSignature,
 	/// define the way convert collected data into string (using lineFormat)
-	pub formater: FormaterSignature
+	pub formaterCompiler: FormaterCompilerSignature
 }
 
 impl Default for CommandLineConfig
@@ -39,9 +39,9 @@ impl Default for CommandLineConfig
 		return CommandLineConfig{
 			colors,
 			lineReturn: " | ".to_string(),
-			lineFormat: "{time} {lvl} ({thread+,}{file}:l{line}) : {msg}".to_string(),
-			formaterBuilder: HtraceDefaultFormaterBuilder,
-			formater: HtraceDefaultFormater,
+			lineFormat: "{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}".to_string(),
+			formaterParamBuilder: FormaterParamBuilder,
+			formaterCompiler: FormaterCompile,
 		};
 	}
 }
@@ -49,15 +49,19 @@ impl Default for CommandLineConfig
 pub struct CommandLine
 {
 	_name: String,
-	_configs: CommandLineConfig
+	_configs: CommandLineConfig,
+	_formaterCompiled: FormaterCompiled,
 }
 
 impl CommandLine
 {
-	pub fn new(configs: CommandLineConfig) -> CommandLine {
+	pub fn new(config: CommandLineConfig) -> CommandLine {
+		let binding = &config.formaterCompiler;
+		let fmtComp = binding(&config.lineFormat);
 		return CommandLine{
 			_name: String::new(),
-			_configs: configs
+			_configs: config,
+			_formaterCompiled: fmtComp,
 		};
 	}
 	
@@ -65,13 +69,12 @@ impl CommandLine
 	{
 		let color = self._configs.colors.get(&trace.level).unwrap_or(&Style::new()).clone();
 
-		let binding = &self._configs.formaterBuilder;
+		let binding = &self._configs.formaterParamBuilder;
 		let mut parameters = binding(trace, &self._configs.lineReturn);
 		parameters.get_mut("lvl").iter_mut().for_each(|x| **x = x.style(color).to_string());
 		parameters.get_mut("msg").iter_mut().for_each(|x| **x = x.style(color).to_string());
 
-		let binding = &self._configs.formater;
-		println!("{}",binding(&self._configs.lineFormat, parameters));
+		println!("{}",self._formaterCompiled.render(parameters));
 	}
 }
 
@@ -128,12 +131,16 @@ impl ModuleAbstract for CommandLine
 				}
 			}
 		}*/
-		
-		
+
 		setConfig_String(config,"lineReturn",&mut self._configs.lineReturn,|_|true);
 		setConfig_String(config,"lineFormat",&mut self._configs.lineFormat,|a|{
 			!a.contains("{color}")
 		});
+
+		// update formater
+		let binding = &self._configs.formaterCompiler;
+		let fmtComp = binding(&self._configs.lineFormat);
+		self._formaterCompiled = fmtComp;
 		
 		Ok(())
 	}

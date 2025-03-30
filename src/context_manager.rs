@@ -62,6 +62,8 @@ impl ContextManager
 	}
 
 	/// resolve a trace context
+	/// it starts from the global context, go into the current thread, and go down do the last context (the closest one)
+	/// each context add its own information/modules/extras
 	pub fn resolve(&self) -> Context
 	{
 		let Some(threadName) = ThreadManager::local_getName()
@@ -112,6 +114,11 @@ impl ContextManager
 			{
 				resolvedContext.threadName_set(name);
 			}
+			if let Some(name) = oneContext.name_get()
+			{
+				resolvedContext.name_set(name);
+			}
+			resolvedContext.extra_merge(oneContext.extra_getAll());
 		});
 
 		return resolvedContext;
@@ -120,26 +127,22 @@ impl ContextManager
 	/// resolve the main context
 	fn resolve_main(&self) -> Context
 	{
+		let defaultContext = || {
+			let mut context = Context::default();
+			context.threadName_set(MAIN_THREAD);
+			return context;
+		};
+
 		let Some(contextArray) = self.data.get(&MAIN_THREAD.to_string())
 		else
 		{
-			let mut context = Context::default();
-			if let Some(name) = ThreadManager::local_getName()
-			{
-				context.threadName_set(name);
-			}
-			return context;
+			return defaultContext();
 		};
 
 		let Some(context) = contextArray.get(0)
 		else
 		{
-			let mut context = Context::default();
-			if let Some(name) = ThreadManager::local_getName()
-			{
-				context.threadName_set(name);
-			}
-			return context;
+			return defaultContext();
 		};
 
 		return context.clone();

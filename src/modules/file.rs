@@ -5,7 +5,7 @@ use anyhow::Result;
 use Hconfig::tinyjson::JsonValue;
 use time::macros::format_description;
 use crate::components::context::Context;
-use crate::components::formater::{FormaterBuilderSignature, FormaterSignature, HtraceDefaultFormater, HtraceDefaultFormaterBuilder};
+use crate::components::formater::{FormaterParamBuilderSignature, FormaterCompilerSignature, FormaterParamBuilder, FormaterCompile, FormaterCompiled};
 use crate::modules::module_abstract::ModuleAbstract;
 use crate::components::trace::OneTrace;
 use crate::modules::utils::{setConfig_String, setConfig_boolean};
@@ -29,9 +29,9 @@ pub struct FileConfig
 	/// write all trace in one file (auto append "_{time}.trc")
 	pub forceInOneFile: Option<String>,
 	/// define the way to collect data (using lineReturn)
-	pub formaterBuilder: FormaterBuilderSignature,
+	pub formaterParamBuilder: FormaterParamBuilderSignature,
 	/// define the way convert collected data into string (using lineFormat)
-	pub formater: FormaterSignature
+	pub formaterCompiler: FormaterCompilerSignature
 }
 
 impl Default for FileConfig
@@ -40,13 +40,13 @@ impl Default for FileConfig
 		return FileConfig{
 			path: "./traces".to_string(),
 			lineReturn: " | ".to_string(),
-			lineFormat: "{time} {lvl} ({thread+,}{file}:l{line}) : {msg}".to_string(),
+			lineFormat: "{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}".to_string(),
 			byThreadId: true,
 			bySrc: false,
 			byHour: false,
 			forceInOneFile: None,
-			formaterBuilder: HtraceDefaultFormaterBuilder,
-			formater: HtraceDefaultFormater,
+			formaterParamBuilder: FormaterParamBuilder,
+			formaterCompiler: FormaterCompile,
 		};
 	}
 }
@@ -54,25 +54,28 @@ impl Default for FileConfig
 pub struct File
 {
 	_name: String,
-	_configs: FileConfig
+	_configs: FileConfig,
+	_formaterCompiled: FormaterCompiled,
 }
 
 impl File
 {
 	pub fn new(config: FileConfig) -> File {
+		let binding = &config.formaterCompiler;
+		let fmtComp = binding(&config.lineFormat);
 		return File{
 			_name: String::new(),
-			_configs: config
+			_configs: config,
+			_formaterCompiled: fmtComp,
 		};
 	}
 	
 	fn generateLine(&self, trace: &OneTrace)
 	{
 
-		let binding = &self._configs.formaterBuilder;
+		let binding = &self._configs.formaterParamBuilder;
 		let parameters = binding(trace, &self._configs.lineReturn);
-		let binding = &self._configs.formater;
-		let formatResult = binding(&self._configs.lineFormat, parameters);
+		let formatResult = self._formaterCompiled.render(parameters);
 
 		let mut filedateformat = format_description!("[year][month][day]");
 		if(self._configs.byHour)
@@ -165,6 +168,11 @@ impl ModuleAbstract for File
 		{
 			config.insert("forceInOneFile".to_string(), JsonValue::String(self._configs.forceInOneFile.clone().unwrap_or("".to_string())));
 		}
+
+		// update formater
+		let binding = &self._configs.formaterCompiler;
+		let fmtComp = binding(&self._configs.lineFormat);
+		self._formaterCompiled = fmtComp;
 		
 		return Ok(());
 	}

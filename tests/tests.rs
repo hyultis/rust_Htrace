@@ -10,28 +10,34 @@ use Htrace::htracer::HTracer;
 use Htrace::components::level::Level;
 use Htrace::{HTrace, HTraceError, Spaned};
 use Htrace::components::context::Context;
-use Htrace::components::formater::HtraceDefaultFormater;
+use Htrace::components::formater::{FormaterCompile};
 use Htrace::modules::command_line::CommandLineConfig;
 use Htrace::modules::file::FileConfig;
 use Htrace::modules::{file, command_line};
 use Htrace::components::trace::OneTrace;
 
+
 #[test]
 fn formater()
 {
-	use Htrace::components::formater::HtraceDefaultFormaterBuilder;
+	use Htrace::components::formater::FormaterParamBuilder;
 	HTracer::globalContext_set(Context::default());
 
-	let parameters = HtraceDefaultFormaterBuilder(&OneTrace {
+	let compiled = FormaterCompile(&"{time} {lvl} ({thread:>, }{file}:l{line} |{extra}{extra[test]}|) : {msg}".to_string());
+
+	let mut context = Context::default();
+	context.extra_set("test","cake");
+
+	let parameters = FormaterParamBuilder(&OneTrace {
 		message: "message line".to_string(),
 		date: datetime!(1900-01-01 0:00 UTC),
 		level: Level::DEBUG,
-		context: Default::default(),
+		context: context,
 		filename: "file.rs".to_string(),
 		fileline: 42,
 		backtraces: vec![],
 	}, &" | ".to_string());
-	assert_eq!(HtraceDefaultFormater(&"{time} {lvl} ({thread+,}{file}:l{line}) : {msg}".to_string(), parameters), "00:00:00.000000 DBUG (MAIN, file.rs:l42) : message line", "simpleFormater format changed");
+	assert_eq!(compiled.render(parameters), "00:00:00.000000 DBUG (MAIN, file.rs:l42 |{extra}cake|) : message line", "simpleFormater format changed");
 }
 
 #[test]
@@ -56,7 +62,7 @@ fn trace() {
 	// trace with return line
 	{
 		let mut local_context = Context::default();
-		local_context.threadName_set("span lvl 1");
+		local_context.name_set("span lvl 1");
 		Spaned!(local_context);
 		HTrace!("test inside span 1");
 		{

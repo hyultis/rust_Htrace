@@ -32,7 +32,7 @@ impl Drop for Span
 ///  use Htrace::components::context::Context;
 ///  use Htrace::Spaned;
 ///  let mut context = Context::default();
-///  context.threadName_set("span lvl1");
+///  context.name_set("span lvl1");
 ///  Spaned!(context);
 /// ```
 ///
