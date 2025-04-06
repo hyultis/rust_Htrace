@@ -4,15 +4,15 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 use time::macros::datetime;
-use Htrace::htracer::HTracer;
-use Htrace::components::level::Level;
-use Htrace::{HTrace, HTraceError, Spaned};
 use Htrace::components::context::Context;
-use Htrace::components::formater::{FormaterCompile};
+use Htrace::components::formater::FormaterCompile;
+use Htrace::components::level::Level;
+use Htrace::components::trace::OneTrace;
+use Htrace::htracer::HTracer;
 use Htrace::modules::command_line_config::CommandLineConfig;
 use Htrace::modules::file_config::FileConfig;
-use Htrace::modules::{file, command_line};
-use Htrace::components::trace::OneTrace;
+use Htrace::modules::{command_line, file};
+use Htrace::{HTrace, HTraceError, Spaned};
 
 
 #[test]
@@ -24,7 +24,7 @@ fn formater()
 	let compiled = FormaterCompile(&"{time} {lvl} ({thread:>, }{file}:l{line} |{extra}{extra[test]}|) : {msg}".to_string());
 
 	let mut context = Context::default();
-	context.extra_set("test","cake");
+	context.extra_set("test", "cake");
 
 	let parameters = FormaterParamBuilder(&OneTrace {
 		message: "message line".to_string(),
@@ -59,7 +59,6 @@ fn trace() {
 		{
 			Spaned!("span lvl 2");
 			HTrace!("test inside span 2");
-
 		}
 		HTrace!("test inside span 1");
 	}
@@ -78,6 +77,38 @@ fn trace() {
 	HTraceError!("File error is : {}",testerror);
 
 	// we need to wait all thread are done
+	sleep(Duration::from_millis(100));
+}
+
+#[test]
+fn toto() {
+	// setting
+	let mut global_context = Context::default();
+	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
+	global_context.module_add("file", file::File::new(FileConfig::default()));
+	global_context.level_setMin(Some(Level::DEBUG));
+	HTracer::globalContext_set(global_context);
+
+	// simple trace of variable
+	let string_test = "machin".to_string();
+	HTrace!(string_test);
+
+	// trace with auto format
+	HTrace!("test macro {}",87);
+
+	// trace with return line
+	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
+
+	// trace different level (ERROR level and above show backtrace)
+	HTrace!((Level::NOTICE) "my trace");
+	HTrace!((Level::ERROR) 21);
+	HTrace!((Level::ERROR) "test macro {}",87);
+
+	// macro for consuming Result, and tracing the error, default to ERROR (ERROR level and above show backtrace)
+	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
+	HTraceError!((Level::FATAL) "File error is : {}",testerror);
+
+	// with the default "threading" features, you need to wait all traces are emited before exiting
 	sleep(Duration::from_millis(100));
 }
 

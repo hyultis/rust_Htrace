@@ -24,6 +24,12 @@ Work as a service (singleton)
 
 Configuration of htrace and each module is saved into configuration dir (via Hconfig), into "Htrace.json"
 
+## Available features
+
+* hconfig : enable creating a module config from a hconfig
+* threading (enabled by default) : enable multithreading (enabled by default)
+* default_module (enabled by default) : enable default module (those in modules src/modules dir)
+
 ## Online Documentation
 
 [Master branch](https://github.com/hyultis/rust_Htrace)
@@ -35,37 +41,34 @@ Note: the crate is using [Hconfig](https://crates.io/crates/Hconfig) for configu
 ```
 fn main()
 {
-	// configuration path, the directory need to be existing or created before continuing
-	HConfigManager::singleton().setConfPath("./config");
-	
-	// Adding modules into Htrace, default configuration is used if there is no configuration file, or missing part.
-	HTracer::appendModule("cmd", CommandLine::CommandLine::new(CommandLineConfig::default())).expect("Cannot append module");
-	HTracer::appendModule("file", File::File::new(FileConfig::default())).expect("Cannot append module");
-	
 	// settings
-	HTracer::threadSetName("testThreadName"); // default thread, can be call for each thread
-	HTracer::minlvl_default(Type::DEBUG);
-	
+	let mut global_context = Context::default();
+	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
+	global_context.module_add("file", file::File::new(FileConfig::default()));
+	global_context.level_setMin(Some(Level::DEBUG));
+	HTracer::globalContext_set(global_context);
+
 	// simple trace of variable
 	let string_test = "machin".to_string();
 	HTrace!(string_test);
-	
+
 	// trace with auto format
 	HTrace!("test macro {}",87);
-	
+
 	// trace with return line
 	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
-	
+
 	// trace different level (ERROR level and above show backtrace)
-	HTrace!((Type::NOTICE) "my trace");
-	HTrace!((Type::ERROR) 21);
-	HTrace!((Type::ERROR) "test macro {}",87);
+	HTrace!((Level::NOTICE) "my trace");
+	HTrace!((Level::ERROR) 21);
+	HTrace!((Level::ERROR) "test macro {}",87);
 
 	// macro for consuming Result, and tracing the error, default to ERROR (ERROR level and above show backtrace)
 	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
-	HTraceError!((Type::FATAL) "File error is : {}",testerror);
-	
-	HTracer::drop(); // cannot be put in "Drop" because of OnceCell
+	HTraceError!((Level::FATAL) "File error is : {}",testerror);
+
+	// with the default "threading" features, you need to wait all traces are emited before exiting
+	sleep(Duration::from_millis(100));
 }
 ```
 

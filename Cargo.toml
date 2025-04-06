@@ -12,22 +12,23 @@ description = "simple tracing system"
 
 
 [features]
-default=["multi_threading"]
+default=["default_module","threading"]
 # this feature enable creating a module config from a hconfig
 hconfig=["Hconfig"]
-# this feature enable multithreading (enabled by default) [TODO: mandatory actually]
-multi_threading=["singletonThread"]
+# this feature enable multithreading (enabled by default)
+threading=["singletonThread","parking_lot"]
+# this feature enable default module (those in modules src/modules dir)
+default_module=[]
 
 [dependencies]
 time = { version="0.3" , features = ["macros","formatting"]}
 anyhow = "1.0"
-#Hconfig = "1.1"
-Hconfig = {  path="../Hconfig", optional = true }
 backtrace = "0.3"
 dashmap = "7.0.0-rc2"
 thiserror = "2.0"
-arc-swap = "1.7"
-parking_lot = "0.12"
-singletonThread = {  version = "1.1" , optional = true}
 owo-colors = "4.2"
-regex = "1.11.1"
+regex = "1.11"
+#Hconfig = "1.1"
+Hconfig = {  path="../Hconfig", optional = true }
+parking_lot = { version = "0.12" , optional = true}
+singletonThread = {  version = "1.1" , optional = true}

@@ -3,18 +3,24 @@ use std::fmt::{Debug, Display};
 use crate::components::trace::OneTrace;
 use crate::components::level::Level;
 use std::sync::{OnceLock};
-use std::{thread};
-use parking_lot::{RwLock};
-use singletonThread::SingletonThread;
 use time::OffsetDateTime;
 use crate::components::backtrace::Backtrace as hbacktrace;
 use crate::components::context::Context;
 use crate::context_manager::ContextManager;
 use crate::thread_manager::{ThreadManager, MAIN_THREAD};
 
+#[cfg(feature = "threading")]
+use std::{thread};
+#[cfg(feature = "threading")]
+use singletonThread::SingletonThread;
+#[cfg(feature = "threading")]
+use parking_lot::RwLock;
+
 pub struct HTracer
 {
+	#[cfg(feature = "threading")]
 	_deferredTraces: RwLock<Vec<OneTrace>>,
+	#[cfg(feature = "threading")]
 	_threadWriting: RwLock<SingletonThread>
 }
 
@@ -81,10 +87,15 @@ impl HTracer
 			backtraces,
 		};
 
+		#[cfg(feature = "threading")]
 		thread::spawn(move ||{
 			Self::singleton()._deferredTraces.write().push(trace);
 			Self::singleton()._threadWriting.write().thread_launch_delayabe();
 		});
+		#[cfg(not(feature = "threading"))]
+		{
+			trace.emit();
+		}
 	}
 	
 	pub fn backtrace() -> Vec<hbacktrace>
@@ -136,6 +147,12 @@ impl HTracer
 	
 	//////////// PRIVATE ///////////
 
+	#[cfg(not(feature = "threading"))]
+	fn new() -> HTracer {
+		return HTracer {};
+	}
+
+	#[cfg(feature = "threading")]
 	fn new() -> HTracer {
 
 		let thread = SingletonThread::new(||{
@@ -147,7 +164,8 @@ impl HTracer
 			_threadWriting: RwLock::new(thread),
 		};
 	}
-	
+
+	#[cfg(feature = "threading")]
 	fn internal_writeTraces(&self)
 	{
 		let mut binding = Self::singleton()._deferredTraces.write();

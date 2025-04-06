@@ -1,8 +1,14 @@
 
-pub mod file;
 pub mod module_abstract;
-pub mod command_line;
+
+#[cfg(feature = "default_module")]
+pub mod file;
+#[cfg(feature = "default_module")]
 pub mod file_config;
+
+#[cfg(feature = "default_module")]
+pub mod command_line;
+#[cfg(feature = "default_module")]
 pub mod command_line_config;
 
 #[cfg(feature = "hconfig")]
