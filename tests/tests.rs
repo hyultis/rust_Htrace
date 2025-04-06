@@ -1,18 +1,16 @@
 #![allow(unused_parens)]
 
-use std::fs::create_dir;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
-use Hconfig::HConfigManager::HConfigManager;
 use time::macros::datetime;
 use Htrace::htracer::HTracer;
 use Htrace::components::level::Level;
 use Htrace::{HTrace, HTraceError, Spaned};
 use Htrace::components::context::Context;
 use Htrace::components::formater::{FormaterCompile};
-use Htrace::modules::command_line::CommandLineConfig;
-use Htrace::modules::file::FileConfig;
+use Htrace::modules::command_line_config::CommandLineConfig;
+use Htrace::modules::file_config::FileConfig;
 use Htrace::modules::{file, command_line};
 use Htrace::components::trace::OneTrace;
 
@@ -42,13 +40,6 @@ fn formater()
 
 #[test]
 fn trace() {
-	let config_dir = Path::new("./config");
-	if (!config_dir.exists())
-	{
-		create_dir(config_dir).unwrap();
-	}
-
-	HConfigManager::singleton().confPath_set("./config");
 	let mut global_context = Context::default();
 	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
 	global_context.module_add("file", file::File::new(FileConfig::default()));
@@ -88,4 +79,33 @@ fn trace() {
 
 	// we need to wait all thread are done
 	sleep(Duration::from_millis(100));
+}
+
+#[cfg(feature = "hconfig")]
+#[test]
+fn trace_with_hconfig() {
+	use std::fs::create_dir;
+	use Hconfig::HConfigManager::HConfigManager;
+	use Hconfig::IO::json::WrapperJson;
+
+	// hconfig creating config dir
+	let config_dir = Path::new("./config");
+	if (!config_dir.exists())
+	{
+		create_dir(config_dir).unwrap();
+	}
+
+	// initialising hconfig and htrace config
+	HConfigManager::singleton().confPath_set("./config");
+	HConfigManager::singleton().create::<WrapperJson>("htrace").expect("bug from hconfig");
+
+	let mut global_context = Context::default();
+	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::create_from_hconfig(HConfigManager::singleton().get("htrace").unwrap().value_get_mut("cmd").unwrap())));
+	global_context.module_add("file", file::File::new(FileConfig::create_from_hconfig(HConfigManager::singleton().get("htrace").unwrap().value_get_mut("file").unwrap())));
+	global_context.level_setMin(Some(Level::DEBUG));
+	HTracer::globalContext_set(global_context);
+
+	// simple trace of variable
+	let string_test = "test with hconfig".to_string();
+	HTrace!(string_test);
 }

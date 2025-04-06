@@ -20,8 +20,6 @@ pub enum Errors
 	CannotFoundConfigNode(String),
 	#[error("module '{0}' configuration returned a error : {1}")]
 	ModuleConfigError(String,#[source] anyhow::Error),
-	#[error("Error with HConfig {0} on : {1}")]
-	HConfigError(String,#[source] Hconfig::Errors)
 }
 
 /// Shortcut for the trace function (defaults to Type::NORMAL)

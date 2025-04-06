@@ -10,18 +10,24 @@ keywords = ["tracing","trace","log","logging"]
 categories = ["development-tools::debugging"]
 description = "simple tracing system"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default=["multi_threading"]
+# this feature enable creating a module config from a hconfig
+hconfig=["Hconfig"]
+# this feature enable multithreading (enabled by default) [TODO: mandatory actually]
+multi_threading=["singletonThread"]
 
 [dependencies]
 time = { version="0.3" , features = ["macros","formatting"]}
 anyhow = "1.0"
 #Hconfig = "1.1"
-Hconfig = {  path="../Hconfig" }
+Hconfig = {  path="../Hconfig", optional = true }
 backtrace = "0.3"
 dashmap = "7.0.0-rc2"
 thiserror = "2.0"
 arc-swap = "1.7"
 parking_lot = "0.12"
-singletonThread = "1.1"
+singletonThread = {  version = "1.1" , optional = true}
 owo-colors = "4.2"
 regex = "1.11.1"
