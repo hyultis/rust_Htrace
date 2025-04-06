@@ -26,7 +26,7 @@ Configuration of htrace and each module is saved into configuration dir (via Hco
 
 ## Available features
 
-* hconfig : enable creating a module config from a hconfig
+* hconfig : enable creating a module config from a [Hconfig](https://crates.io/crates/Hconfig)
 * threading (enabled by default) : enable multithreading (enabled by default)
 * default_module (enabled by default) : enable default module (those in modules src/modules dir)
 
@@ -35,8 +35,6 @@ Configuration of htrace and each module is saved into configuration dir (via Hco
 [Master branch](https://github.com/hyultis/rust_Htrace)
 
 ## Example
-
-Note: the crate is using [Hconfig](https://crates.io/crates/Hconfig) for configuration
 
 ```
 fn main()
