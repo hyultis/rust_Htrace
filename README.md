@@ -55,6 +55,12 @@ fn main()
 
 	// trace with return line
 	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
+	
+	// trace with a different span
+	{
+		Spaned!("span test");
+		HTrace!("Trace in a span");
+	} // span is drop here
 
 	// trace different level (ERROR level and above show backtrace)
 	HTrace!((Level::NOTICE) "my trace");
