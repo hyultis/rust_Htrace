@@ -1,5 +1,6 @@
 #![allow(unused_parens)]
 
+use std::fs;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
@@ -18,6 +19,8 @@ use Htrace::{HTrace, HTraceError, Spaned};
 #[test]
 fn formater()
 {
+	clear_trace_dir();
+
 	use Htrace::components::formater::FormaterParamBuilder;
 	HTracer::globalContext_set(Context::default());
 
@@ -40,6 +43,8 @@ fn formater()
 
 #[test]
 fn trace() {
+	clear_trace_dir();
+
 	let mut global_context = Context::default();
 	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
 	global_context.module_add("file", file::File::new(FileConfig::default()));
@@ -82,6 +87,8 @@ fn trace() {
 
 #[test]
 fn toto() {
+	clear_trace_dir();
+
 	// setting
 	let mut global_context = Context::default();
 	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
@@ -115,6 +122,8 @@ fn toto() {
 #[cfg(feature = "hconfig")]
 #[test]
 fn trace_with_hconfig() {
+	clear_trace_dir();
+
 	use std::fs::create_dir;
 	use Hconfig::HConfigManager::HConfigManager;
 	use Hconfig::IO::json::WrapperJson;
@@ -139,4 +148,10 @@ fn trace_with_hconfig() {
 	// simple trace of variable
 	let string_test = "test with hconfig".to_string();
 	HTrace!(string_test);
+}
+
+/// clear trace dir for "file" module
+fn clear_trace_dir()
+{
+	let _ = fs::remove_dir_all("./traces");
 }
