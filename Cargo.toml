@@ -37,8 +37,7 @@ regex = "1.11"
 #Hconfig = "1.1"
 Hconfig = { path = "../Hconfig", optional = true }
 parking_lot = "0.12"
-#singletonThread = "2.0.0"
-singletonThread = { path = "../singletonThread" }
+singletonThread = "2.1.0"
 log = { version = "0.4.27", features = ["std"], optional = true }
 tracing-subscriber = { version = "0.3.19", features = [
     "registry",

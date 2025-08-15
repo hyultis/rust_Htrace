@@ -22,7 +22,7 @@ impl Log for HtraceBridge {
 		let mut backtrace = vec![];
 		if(self.isBacktrace(&convertedLevel))
 		{
-			backtrace = htracer::HTracer::backtrace();
+			backtrace = htracer::HTracer::backtrace(file);
 		}
 
 		htracer::HTracer::trace(&arg, convertedLevel, file, line,backtrace);

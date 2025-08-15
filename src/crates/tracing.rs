@@ -63,7 +63,7 @@ where
 		let mut backtrace = vec![];
 		if(self.isBacktrace(&convertedLevel))
 		{
-			backtrace = HTracer::backtrace();
+			backtrace = HTracer::backtrace(file);
 		}
 
 		HTracer::trace(&msg, convertedLevel, file, line, backtrace);

@@ -139,7 +139,7 @@ impl HTracer
 		});
 	}
 	
-	pub fn backtrace() -> Vec<hbacktrace>
+	pub fn backtrace(base: &str) -> Vec<hbacktrace>
 	{
 		let mut internal = true;
 		let mut returning = Vec::new();
@@ -152,6 +152,7 @@ impl HTracer
 			backtrace::resolve_frame(x, |symbol| {
 				if let Some(inname) = symbol.name()
 				{
+
 					if let Some((splitted,_)) = inname.to_string().rsplit_once("::")
 					{
 						solvable = true;
@@ -168,11 +169,13 @@ impl HTracer
 				}
 			});
 
-			if(name.eq("Htrace::htracer::HTracer::backtrace()"))
+			if(filename.ends_with(base))
 			{
 				internal = false;
 			}
-			else if !internal && solvable
+
+			// probably the /rustc/ part is not multiplatform safe
+			if !internal && solvable && !filename.starts_with("/rustc/")
 			{
 				returning.push(hbacktrace {
 					funcName: name,

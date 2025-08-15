@@ -48,7 +48,7 @@ macro_rules! HTrace
 	(($b:expr) $a:expr) => {
 		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
 		{
-	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(),$crate::htracer::HTracer::backtrace());
+	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()));
 		}
 		else
 		{
@@ -61,7 +61,7 @@ macro_rules! HTrace
 	(($b:expr) $a:expr $(,$arg:expr)*) => {
 		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
 		{
-	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::htracer::HTracer::backtrace())
+	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()))
 		}
 		else
 		{
