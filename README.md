@@ -6,7 +6,7 @@ HTrace, aim to generate simple, human-readable, tracing lines into different mod
 Usable for realtime application, script, api or website.
 Work as a service (singleton)
 
-**Htrace contains 2 default modules : (you can write your own module easily )**
+**Htrace contains two default modules: (you can write your own module easily)**
 
 * File : write trace into file (write a file by day or by hour, by thread name, by source file, etc)
 * CommandLine : write trace into stdout (with coloration)
@@ -27,8 +27,9 @@ Configuration of htrace and each module is saved into configuration dir (via Hco
 ## Available features
 
 * hconfig : enable creating a module config from a [Hconfig](https://crates.io/crates/Hconfig)
-* threading (enabled by default) : enable multithreading (enabled by default)
 * default_module (enabled by default) : enable default module (those in modules src/modules dir)
+* tracing_subscriber : create and enable a tracing subcriber (set global)
+* log_consumer : create and enable a log consumer (set global)
 
 ## Online Documentation
 

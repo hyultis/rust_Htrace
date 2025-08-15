@@ -61,6 +61,16 @@ impl ContextManager
 		self.data.insert(globalName,vec![context]);
 	}
 
+	/// get the global context
+	pub(crate) fn global_get(&self) -> Option<Context>
+	{
+		let globalName = MAIN_THREAD.to_string();
+		match self.data.get(&globalName) {
+			None => None,
+			Some(contextArray) => contextArray.get(0).cloned()
+		}
+	}
+
 	/// resolve a trace context
 	/// it starts from the global context, go into the current thread, and go down do the last context (the closest one)
 	/// each context add its own information/modules/extras

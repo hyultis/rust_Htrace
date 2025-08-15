@@ -9,27 +9,30 @@ use crate::components::context::Context;
 use crate::context_manager::ContextManager;
 use crate::thread_manager::{ThreadManager, MAIN_THREAD};
 
-#[cfg(feature = "threading")]
-use std::{thread};
-#[cfg(feature = "threading")]
+use std::{mem, thread};
+use std::thread::sleep;
+use std::time::Duration;
 use singletonThread::SingletonThread;
-#[cfg(feature = "threading")]
 use parking_lot::RwLock;
+use crate::crates::bridge::HtraceBridge;
 
 pub struct HTracer
 {
-	#[cfg(feature = "threading")]
 	_deferredTraces: RwLock<Vec<OneTrace>>,
-	#[cfg(feature = "threading")]
 	_threadWriting: RwLock<SingletonThread>
 }
 
+static CONTEXTSET: OnceLock<RwLock<bool>> = OnceLock::new();
 static SINGLETON: OnceLock<HTracer> = OnceLock::new();
 
 impl HTracer
 {
 	pub fn singleton() -> &'static HTracer
 	{
+		if(*CONTEXTSET.get_or_init(|| RwLock::new(false)).read() == false) {
+			panic!("[Htrace] globalContext_set() must be called before singleton()");
+		}
+
 		return SINGLETON.get_or_init(|| {
 			HTracer::new()
 		});
@@ -37,15 +40,56 @@ impl HTracer
 	
 	/// set (or override) the global context
 	/// rename the local thread to MAIN_THREAD
-	/// should only be call one time on the main thread
-	pub fn globalContext_set(mut context: Context)
+	/// should only be call one time on the main thread before calling singleton() (another call will reset context)
+	/// in case of "log_consumer" or "tracing_consumer" features, define HtraceBridge between Htrace and log or tracing (only the first time, do not change if recalled).
+	pub fn globalContext_set(mut context: Context,
+	                         #[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
+	                         bridge: HtraceBridge)
 	{
+		let contextSet = CONTEXTSET.get_or_init(|| RwLock::new(false));
+
 		if(context.threadName_get().is_none())
 		{
 			context.threadName_set(MAIN_THREAD);
 		}
+
+		// auto define of the bridge is only done one time
+		if(*contextSet.read() == false)
+		{
+			#[cfg(feature = "log_consumer")]
+			{
+				if let Some(minlevel) = context.level_getMin()
+				{
+					log::set_max_level(crate::crates::log::LogHtraceToLogLevelMapper(minlevel).to_level_filter());
+				}
+
+				if let Err(err) = log::set_boxed_logger(Box::new(bridge.clone()))
+				{
+					log::warn!("[Htrace] global default tracing-subscriber is already set : {}",err);
+				}
+			}
+
+			#[cfg(feature = "tracing_consumer")]
+			{
+				use tracing_subscriber::layer::SubscriberExt;
+
+				let subscriber = tracing_subscriber::Registry::default()
+					.with(bridge);
+
+				if let Err(err) = tracing::subscriber::set_global_default(subscriber)
+				{
+					tracing::warn!("[Htrace] global default tracing-subscriber is already set : {}",err);
+				}
+			}
+		}
+
 		ContextManager::singleton().global_set(context);
 		ThreadManager::local_setName(MAIN_THREAD);
+		*contextSet.write() = true;
+
+		// one call to atleast initiate the singleton
+		HTracer::singleton();
+
 	}
 	
 	pub fn trace<T>(rawEntry : &T, level: Level, file: &str, line: u32, backtraces: Vec<hbacktrace>)
@@ -74,28 +118,25 @@ impl HTracer
 			}
 		};
 
-		let file = file.to_string();
-		let time = OffsetDateTime::now_utc();
 		let context = ContextManager::singleton().resolve();
+		if(level.tou8() < context.level_getMin().unwrap_or(&Level::DEBUG).tou8()) {
+			return;
+		}
+
 		let trace = OneTrace {
-			message: tmp,
-			date: time,
+			message: tmp.clone(),
+			date: OffsetDateTime::now_utc(),
 			level,
 			context,
-			filename: file,
+			filename: file.to_string(),
 			fileline: line,
 			backtraces,
 		};
 
-		#[cfg(feature = "threading")]
 		thread::spawn(move ||{
 			Self::singleton()._deferredTraces.write().push(trace);
 			Self::singleton()._threadWriting.write().thread_launch_delayabe();
 		});
-		#[cfg(not(feature = "threading"))]
-		{
-			trace.emit();
-		}
 	}
 	
 	pub fn backtrace() -> Vec<hbacktrace>
@@ -144,17 +185,26 @@ impl HTracer
 		
 		return returning;
 	}
+
+	pub fn drop()
+	{
+		sleep(Duration::from_millis(1));
+
+		Self::singleton()._threadWriting.write().loop_set(false);
+
+		// TODO : better handling of the error ?
+		let _ = Self::singleton()._threadWriting.write().wait();
+
+		let remainTraces = Self::singleton()._deferredTraces.read().len();
+		if(remainTraces > 0)
+		{
+			Self::singleton().internal_writeTraces();
+		}
+	}
 	
 	//////////// PRIVATE ///////////
 
-	#[cfg(not(feature = "threading"))]
 	fn new() -> HTracer {
-		return HTracer {};
-	}
-
-	#[cfg(feature = "threading")]
-	fn new() -> HTracer {
-
 		let thread = SingletonThread::new(||{
 			Self::singleton().internal_writeTraces();
 		});
@@ -165,11 +215,14 @@ impl HTracer
 		};
 	}
 
-	#[cfg(feature = "threading")]
 	fn internal_writeTraces(&self)
 	{
-		let mut binding = Self::singleton()._deferredTraces.write();
-		let getWritingStuff = binding.drain(0..).collect::<Vec<_>>();
+		let mut getWritingStuff = {
+			let mut binding = Self::singleton()._deferredTraces.write();
+			mem::replace(&mut *binding,vec![])
+		};
+
+		getWritingStuff.sort_by(|a,b| a.date.cmp(&b.date));
 		
 		for x in getWritingStuff {
 			x.emit();

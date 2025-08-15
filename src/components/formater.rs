@@ -21,10 +21,18 @@ impl FormaterCompiled
 	pub fn render(&self, parameters: HashMap<String, String>) -> String
 	{
 		return self.inner.iter().map(|(previous,data)|{
-			let Some(data) = data else {
-				return previous.clone();
-			};
-			format!("{}{}{}{}", previous, data.prefix, parameters.get(&data.data).unwrap_or(&String::new()), data.suffix)
+			if let Some(data) = data
+			{
+				match parameters.get(&data.data) {
+					None => {}
+					Some(content) => {
+						if(!content.is_empty()) {
+							return format!("{}{}{}{}", previous, data.prefix, parameters.get(&data.data).unwrap_or(&String::new()), data.suffix);
+						}
+					}
+				}
+			}
+			return previous.clone();
 		}).collect::<Vec<String>>().join("");
 	}
 }

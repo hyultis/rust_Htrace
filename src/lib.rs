@@ -11,6 +11,8 @@ pub mod components;
 mod thread_manager;
 mod context_manager;
 
+pub mod crates;
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

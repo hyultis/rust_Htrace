@@ -6,22 +6,28 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/hyultis/rust_Htrace"
-keywords = ["tracing","trace","log","logging"]
+keywords = ["tracing", "trace", "log", "logging"]
 categories = ["development-tools::debugging"]
 description = "simple tracing system"
 
 
 [features]
-default=["default_module","threading"]
-# this feature enable creating a module config from a hconfig
-hconfig=["Hconfig"]
-# this feature enable multithreading (enabled by default)
-threading=["singletonThread","parking_lot"]
+default = ["default_module", "tracing_consumer", "log_consumer","hconfig"]
+# this feature enables creating a module config from a hconfig, activate default_module
+hconfig = ["Hconfig", "default_module"]
 # this feature enable default module (those in modules src/modules dir)
-default_module=[]
+default_module = []
+# this feature defines Htrace as a logger (https://crates.io/crates/log)
+# allowing to use trace!() and other macros
+# still need defining Htrace global context
+log_consumer = ["log"]
+# this feature defines Htrace as a tracing subscriber (https://crates.io/crates/tracing-subscriber)
+# allowing to use tracing as usual
+# still need defining Htrace global context
+tracing_consumer = ["tracing-subscriber","tracing-log","tracing"]
 
 [dependencies]
-time = { version="0.3" , features = ["macros","formatting"]}
+time = { version = "0.3", features = ["macros", "formatting"] }
 anyhow = "1.0"
 backtrace = "0.3"
 dashmap = "7.0.0-rc2"
@@ -29,6 +35,14 @@ thiserror = "2.0"
 owo-colors = "4.2"
 regex = "1.11"
 #Hconfig = "1.1"
-Hconfig = {  path="../Hconfig", optional = true }
-parking_lot = { version = "0.12" , optional = true}
-singletonThread = {  version = "1.1" , optional = true}
+Hconfig = { path = "../Hconfig", optional = true }
+parking_lot = "0.12"
+#singletonThread = "2.0.0"
+singletonThread = { path = "../singletonThread" }
+log = { version = "0.4.27", features = ["std"], optional = true }
+tracing-subscriber = { version = "0.3.19", features = [
+    "registry",
+    "env-filter",
+], optional = true }
+tracing-log = { version = "0.2.0", optional = true }
+tracing = { version = "0.1.41", optional = true }
