@@ -7,6 +7,7 @@ use std::fs::create_dir;
 use std::path::Path;
 use Htrace::components::context::Context;
 use Htrace::components::level::Level;
+#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
 use Htrace::crates::bridge::HtraceBridge;
 use Htrace::HTrace;
 use Htrace::htracer::HTracer;

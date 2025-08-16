@@ -6,6 +6,7 @@ use Htrace::components::context::Context;
 use Htrace::components::formater::{FormaterCompile, FormaterParamBuilder};
 use Htrace::components::level::Level;
 use Htrace::components::trace::OneTrace;
+#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
 use Htrace::crates::bridge::HtraceBridge;
 use Htrace::htracer::HTracer;
 

@@ -5,11 +5,11 @@ pub struct HtraceBridge {
 	/// minimum level for backtrace (default warn)
 	min_level_backtrace: Level,
 
-	#[cfg(feature = "log_consumer")]
 	/// Htrace.level::DEBUG is the minimum level (that must be set here), correspond to: Log.level::Trace is the maximum level
+	#[cfg(feature = "log_consumer")]
 	pub min_level_log: Level,
-	#[cfg(feature = "tracing_consumer")]
 	/// Htrace.level::DEBUG is the minimum level (that must be set here), correspond to: Tracing.level::Trace is the maximum level
+	#[cfg(feature = "tracing_consumer")]
 	pub min_level_tracing: Level,
 }
 

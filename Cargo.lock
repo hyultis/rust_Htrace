@@ -5,6 +5,8 @@ version = 4
 [[package]]
 name = "Hconfig"
 version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2630961cd7b5f5ec6a1917310342394be0ce70ce55d394caa79d4609383c5278"
 dependencies = [
  "arc-swap",
  "dashmap",

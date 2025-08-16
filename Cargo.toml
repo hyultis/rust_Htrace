@@ -12,7 +12,7 @@ description = "simple tracing system"
 
 
 [features]
-default = ["default_module", "tracing_consumer", "log_consumer","hconfig"]
+default = ["default_module"]
 # this feature enables creating a module config from a hconfig, activate default_module
 hconfig = ["Hconfig", "default_module"]
 # this feature enable default module (those in modules src/modules dir)
@@ -29,13 +29,12 @@ tracing_consumer = ["tracing-subscriber","tracing-log","tracing"]
 [dependencies]
 time = { version = "0.3", features = ["macros", "formatting"] }
 anyhow = "1.0"
-backtrace = "0.3"
+backtrace = { version = "0.3", features = ["std"] }
 dashmap = "7.0.0-rc2"
 thiserror = "2.0"
 owo-colors = "4.2"
 regex = "1.11"
-#Hconfig = "1.1"
-Hconfig = { path = "../Hconfig", optional = true }
+Hconfig = { version = "2.0", optional = true }
 parking_lot = "0.12"
 singletonThread = "2.1.0"
 log = { version = "0.4.27", features = ["std"], optional = true }

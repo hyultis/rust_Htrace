@@ -1,35 +1,74 @@
 # HTrace
 
-A tracing class.
+A tracing library.
 
-HTrace, aim to generate simple, human-readable, tracing lines into different modules.
-Usable for realtime application, script, api or website.
-Work as a service (singleton)
+HTrace aims to generate simple, human-readable tracing lines across different modules.  
+It can be used in real-time applications, scripts, APIs, or websites.  
+It works as a service (singleton).
 
-**Htrace contains two default modules: (you can write your own module easily)**
+**HTrace provides two default modules:**
 
-* File : write trace into file (write a file by day or by hour, by thread name, by source file, etc)
-* CommandLine : write trace into stdout (with coloration)
+* **File**: writes traces into files (by day, by hour, by thread name, by source file, etc.)
+* **CommandLine**: writes traces to stdout (with color highlighting)
+* you can easily write your own using **ModuleAbstract** trait.
 
-**list of trace level : (in order)**
+**List of trace levels (in order):**
 
-* Type::DEBUG : debugging trace (for developpement) - LOWER LEVEL
-* Type::DEBUGERR : debugging trace for a error
-* Type::NORMAL : normal trace
-* Type::NOTICE : important trace for the remaining of trace
-* Type::NOTICEDERR => trace of an error, but who have been noticed to somebody (mail by example)
-* Type::WARNING => trace that need to be checked
-* Type::ERROR : trace of an error or something that blocks
-* Type::FATAL : trace who lead into panic - HIGHER LEVEL
+* `Type::DEBUG` – debugging traces (for development) – LOWEST LEVEL
+* `Type::DEBUGERR` – debugging traces for errors
+* `Type::NORMAL` – normal traces
+* `Type::NOTICE` – important traces for future reference
+* `Type::NOTICEDERR` – traces of errors that have already been acknowledged (e.g., notified by mail)
+* `Type::WARNING` – traces that should be checked
+* `Type::ERROR` – traces of errors or blocking issues
+* `Type::FATAL` – traces that lead to a panic – HIGHEST LEVEL
 
-Configuration of htrace and each module is saved into configuration dir (via Hconfig), into "Htrace.json"
+The configuration of HTrace and its modules is stored in the configuration directory (via [Hconfig](https://crates.io/crates/Hconfig)), in the file `Htrace.json`.
+
+---
 
 ## Available features
 
-* hconfig : enable creating a module config from a [Hconfig](https://crates.io/crates/Hconfig)
-* default_module (enabled by default) : enable default module (those in modules src/modules dir)
-* tracing_subscriber : create and enable a tracing subcriber (set global)
-* log_consumer : create and enable a log consumer (set global)
+* **hconfig** – load/save a module config from [Hconfig](https://crates.io/crates/Hconfig)
+* **default_module** (enabled by default) – enables the default modules (those in `src/modules`)
+* **tracing_subscriber** – create and enable a tracing subscriber (set as global)
+* **log_consumer** – create and enable a log consumer (set as global)
+
+---
+
+## Backtrace
+
+HTrace displays a backtrace if the trace level is **ERROR** or **FATAL**.  
+This uses the [backtrace](https://crates.io/crates/backtrace) crate, which requires debug symbols in your build.
+
+Example inside your `Cargo.toml`:
+
+```toml
+[profile.release]
+debug = "line-tables-only"
+```
+
+`line-tables-only` is the lowest level that provides enough backtrace information for HTrace (file information).
+If you want to hide parts of file paths, you can use the `--remap-path-prefix flag`.
+Example inside `<project>/.cargo/config.toml`:
+
+```toml
+[build]
+rustflags = [
+    "--remap-path-prefix=/home/user/myproject=/project", # remap all files from /home/user/myproject/... to /project/...
+    "--remap-path-prefix=/home/user/.cargo/registry=/cargo/registry",
+    # etc
+]
+```
+
+### Why does it need file information?
+
+File information is used to hide irrelevant symbols (such as those inside HTrace, or before your main()).
+
+### I don’t want backtrace
+
+Simply leave the debug configuration to the release default (or 0).
+See: [Cargo profiles – debug](https://doc.rust-lang.org/cargo/reference/profiles.html#debug)
 
 ## Online Documentation
 
@@ -38,42 +77,42 @@ Configuration of htrace and each module is saved into configuration dir (via Hco
 ## Example
 
 ```
-fn main()
-{
-	// settings
-	let mut global_context = Context::default();
-	global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
-	global_context.module_add("file", file::File::new(FileConfig::default()));
-	global_context.level_setMin(Some(Level::DEBUG));
-	HTracer::globalContext_set(global_context);
+fn main() {
+    // settings
+    let mut global_context = Context::default();
+    global_context.module_add("cmd", command_line::CommandLine::new(CommandLineConfig::default()));
+    global_context.module_add("file", file::File::new(FileConfig::default()));
+    global_context.level_setMin(Some(Level::DEBUG));
+    HTracer::globalContext_set(global_context);
 
-	// simple trace of variable
-	let string_test = "machin".to_string();
-	HTrace!(string_test);
+    // simple trace of variable
+    let string_test = "machin".to_string();
+    HTrace!(string_test);
 
-	// trace with auto format
-	HTrace!("test macro {}",87);
+    // trace with auto format
+    HTrace!("test macro {}", 87);
 
-	// trace with return line
-	HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
-	
-	// trace with a different span
-	{
-		Spaned!("span test");
-		HTrace!("Trace in a span");
-	} // span is drop here
+    // trace with newlines
+    HTrace!("test macro\nlmsdkhfsldf\nmsdf\nhjsdf");
+    
+    // trace with a different span
+    {
+        Spaned!("span test");
+        HTrace!("Trace in a span");
+    } // span is dropped here
 
-	// trace different level (ERROR level and above show backtrace)
-	HTrace!((Level::NOTICE) "my trace");
-	HTrace!((Level::ERROR) 21);
-	HTrace!((Level::ERROR) "test macro {}",87);
+    // traces with different levels (ERROR and above show backtrace)
+    HTrace!((Level::NOTICE) "my trace");
+    HTrace!((Level::ERROR) 21);
+    HTrace!((Level::ERROR) "test macro {}", 87);
 
-	// macro for consuming Result, and tracing the error, default to ERROR (ERROR level and above show backtrace)
-	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
-	HTraceError!((Level::FATAL) "File error is : {}",testerror);
+    // macro for consuming Result and tracing the error, defaults to ERROR
+    // (ERROR and above show backtrace)
+    let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
+    HTraceError!((Level::FATAL) "File error is : {}", testerror);
 
-	// with the default "threading" features, you need to wait all traces are emited before exiting
-	sleep(Duration::from_millis(100));
+	// we need to wait manually that all threads are done
+	HTracer::drop();
 }
 ```
 

@@ -14,6 +14,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use singletonThread::SingletonThread;
 use parking_lot::RwLock;
+#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
 use crate::crates::bridge::HtraceBridge;
 
 pub struct HTracer
@@ -148,8 +149,10 @@ impl HTracer
 			let mut filename = "".to_string();
 			let mut line = 0;
 			let mut solvable = false;
-			
+
+
 			backtrace::resolve_frame(x, |symbol| {
+				//println!("frame symbol : {:?} => {:?} => {:?}",symbol.name(),symbol.filename(),base);
 				if let Some(inname) = symbol.name()
 				{
 
@@ -162,6 +165,12 @@ impl HTracer
 				if let Some(infilename) = symbol.filename()
 				{
 					filename = infilename.to_str().unwrap_or_default().to_string();
+					if(filename.contains("/.cargo/")) {
+						if let Some((_,splitted)) = filename.to_string().rsplit_once("/.cargo/")
+						{
+							filename = splitted.to_string();
+						}
+					}
 				}
 				if let Some(inline) = symbol.lineno()
 				{
