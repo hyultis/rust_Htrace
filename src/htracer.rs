@@ -75,7 +75,7 @@ impl HTracer
 				use tracing_subscriber::layer::SubscriberExt;
 
 				let subscriber = tracing_subscriber::Registry::default()
-					.with(bridge);
+					.with(bridge.filtered());
 
 				if let Err(err) = tracing::subscriber::set_global_default(subscriber)
 				{

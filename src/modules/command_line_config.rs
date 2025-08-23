@@ -36,7 +36,7 @@ impl Default for CommandLineConfig
 		return CommandLineConfig{
 			colors,
 			lineReturn: " | ".to_string(),
-			lineFormat: "{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}".to_string(),
+			lineFormat: "{time} {lvl} ({thread:>, }{context:>, }{file}:l{line}) : {msg}".to_string(),
 			formaterParamBuilder: FormaterParamBuilder,
 			formaterCompiler: FormaterCompile,
 		};

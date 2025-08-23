@@ -32,7 +32,7 @@ impl Default for FileConfig
 		return FileConfig{
 			path: "./traces".to_string(),
 			lineReturn: " | ".to_string(),
-			lineFormat: "{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}".to_string(),
+			lineFormat: "{time} {lvl} ({thread:>, }{context:>, }{file}:l{line}) : {msg}".to_string(),
 			byThreadId: true,
 			bySrc: false,
 			byHour: false,

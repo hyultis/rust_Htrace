@@ -3,7 +3,9 @@ use tracing::{Level as TracingLevel};
 
 use std::fmt;
 use tracing::{Event, Subscriber, field::{Field, Visit}};
-use tracing_subscriber::{layer::{Context, Layer}, registry::LookupSpan};
+use tracing_subscriber::{layer::{Context as TContext, Layer}, registry::LookupSpan};
+use crate::components::context::Context;
+use crate::components::span::Span;
 use crate::crates::bridge::HtraceBridge;
 use crate::htracer::HTracer;
 
@@ -35,7 +37,7 @@ impl<S> Layer<S> for HtraceBridge
 where
 	S: Subscriber + for<'a> LookupSpan<'a>,
 {
-	fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+	fn on_event(&self, event: &Event<'_>, ctx: TContext<'_, S>) {
 		let mut v = Visitor::new();
 		event.record(&mut v);
 
@@ -49,6 +51,17 @@ where
 				let _ = write!(msg, "{}={}", k, val);
 			}
 			msg.push('}');
+		}
+
+		// get span
+		let mut span_str = None;
+		if let Some(scope) = ctx.event_scope(event) {
+			let mut tmp = String::new();
+			for (i, span) in scope.from_root().enumerate() {
+				if i > 0 { tmp.push_str("::"); }
+				tmp = format!("{}{}", tmp, span.name());
+			}
+			span_str = Some(tmp);
 		}
 
 		let convertedLevel  = TracingLevelToHtraceMapper(event.metadata().level());
@@ -66,7 +79,18 @@ where
 			backtrace = HTracer::backtrace(file);
 		}
 
-		HTracer::trace(&msg, convertedLevel, file, line, backtrace);
+		if let Some(span) = span_str
+		{
+			let mut context = Context::default();
+			context.name_set(span);
+
+			let _span = Span::new(context);
+			HTracer::trace(&msg, convertedLevel, file, line, backtrace);
+		}
+		else
+		{
+			HTracer::trace(&msg, convertedLevel, file, line, backtrace);
+		}
 	}
 }
 
