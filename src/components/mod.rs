@@ -1,5 +1,5 @@
 pub mod span;
-pub mod backtrace;
+pub mod hbacktrace;
 pub mod level;
 pub mod trace;
 pub mod context;

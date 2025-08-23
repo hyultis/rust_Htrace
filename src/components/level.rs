@@ -93,7 +93,7 @@ impl Level
 		}
 	}
 
-	/// return lowest possible level (DEBUG)
+	/// return the lowest possible level (DEBUG)
 	pub fn min(&self) -> Level
 	{
 		Level::DEBUG

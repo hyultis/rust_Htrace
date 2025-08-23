@@ -41,7 +41,12 @@ The configuration of HTrace and its modules is stored in the configuration direc
 HTrace displays a backtrace if the trace level is **ERROR** or **FATAL**.  
 This uses the [backtrace](https://crates.io/crates/backtrace) crate, which requires debug symbols in your build.
 
-Example inside your `Cargo.toml`:
+The profile `release` default configuration will only show method names.  
+If you want to show file paths or file lines, you need to change the debug configuration.
+
+### How to change improve the backtrace information
+
+inside your `Cargo.toml`: (view more here [Cargo profiles – debug](https://doc.rust-lang.org/cargo/reference/profiles.html#debug))
 
 ```toml
 [profile.release]
@@ -49,6 +54,8 @@ debug = "line-tables-only"
 ```
 
 `line-tables-only` is the lowest level that provides enough backtrace information for HTrace (file information).
+Beware, this will increase the size of your binary.
+
 If you want to hide parts of file paths, you can use the `--remap-path-prefix flag`.
 Example inside `<project>/.cargo/config.toml`:
 
@@ -63,12 +70,7 @@ rustflags = [
 
 ### Why does it need file information?
 
-File information is used to hide irrelevant symbols (such as those inside HTrace, or before your main()).
-
-### I don’t want backtrace
-
-Simply leave the debug configuration to the release default (or 0).
-See: [Cargo profiles – debug](https://doc.rust-lang.org/cargo/reference/profiles.html#debug)
+File information is used to hide irrelevant symbols (such as those inside HTrace, or before your main()) and improve the readability of the backtrace.
 
 ## Online Documentation
 

@@ -4,7 +4,7 @@ use crate::components::trace::OneTrace;
 use crate::components::level::Level;
 use std::sync::{OnceLock};
 use time::OffsetDateTime;
-use crate::components::backtrace::Backtrace as hbacktrace;
+use crate::components::hbacktrace::Hbacktrace;
 use crate::components::context::Context;
 use crate::context_manager::ContextManager;
 use crate::thread_manager::{ThreadManager, MAIN_THREAD};
@@ -93,7 +93,7 @@ impl HTracer
 
 	}
 	
-	pub fn trace<T>(rawEntry : &T, level: Level, file: &str, line: u32, backtraces: Vec<hbacktrace>)
+	pub fn trace<T>(rawEntry : &T, level: Level, file: &str, line: u32, backtraces: Vec<Hbacktrace>)
 		where T: Any + Debug // + ?Display
 	{
 		let anyEntry = rawEntry as &dyn Any;
@@ -140,58 +140,68 @@ impl HTracer
 		});
 	}
 	
-	pub fn backtrace(base: &str) -> Vec<hbacktrace>
+	pub fn backtrace(base: &str) -> Vec<Hbacktrace>
 	{
 		let mut internal = true;
 		let mut returning = Vec::new();
+
+		// in case of no filename/path present, we use the current symbol name
+		let bt = backtrace::Backtrace::new();
+		let thisBTName = bt.frames()[0].symbols()[0].name().map(|x| x.to_string()).unwrap_or_default();
+		//println!("{:?}",bt.frames()[0].symbols()[0].name());
+
+		//println!("frame : -----");
 		backtrace::trace(|x|{
-			let mut name = "".to_string();
-			let mut filename = "".to_string();
-			let mut line = 0;
-			let mut solvable = false;
-
-
 			backtrace::resolve_frame(x, |symbol| {
-				//println!("frame symbol : {:?} => {:?} => {:?}",symbol.name(),symbol.filename(),base);
-				if let Some(inname) = symbol.name()
-				{
+				//println!("frame symbol : {:?} => {:?} => {:?} => {:?}",symbol.name(),symbol.filename(), symbol.lineno(),base);
 
-					if let Some((splitted,_)) = inname.to_string().rsplit_once("::")
-					{
-						solvable = true;
-						name = format!("{}()",splitted);
-					}
-				}
-				if let Some(infilename) = symbol.filename()
+				let name = symbol.name().map(|sbname| sbname.to_string());
+				let filename = symbol.filename().map(|x| x.to_str().unwrap_or_default().to_string());
+				let line = symbol.lineno();
+
+				// solvable
+				let Some(name) = name else {return;};
+				let mut normalizedName = name.clone();
+
+				if let Some((splitted,_)) = name.rsplit_once("::")
 				{
-					filename = infilename.to_str().unwrap_or_default().to_string();
-					if(filename.contains("/.cargo/")) {
-						if let Some((_,splitted)) = filename.to_string().rsplit_once("/.cargo/")
+					normalizedName = format!("{}()",splitted);
+				}
+
+
+				match &filename
+				{
+					None => {
+						if(name == thisBTName)
 						{
-							filename = splitted.to_string();
+							internal = false;
+							return; // start on the next symbol
+						}
+					}
+					Some(filename) => {
+						if(filename.ends_with(base))
+						{
+							internal = false;
+						}
+
+						// ignore rustc backtrace part
+						if(filename.starts_with("/rustc/")) {
+							return;
 						}
 					}
 				}
-				if let Some(inline) = symbol.lineno()
+
+
+				// probably the /rustc/ part is not multiplatform safe
+				if !internal
 				{
-					line = inline;
+					returning.push(Hbacktrace {
+						funcName: normalizedName,
+						fileName: filename,
+						line,
+					});
 				}
 			});
-
-			if(filename.ends_with(base))
-			{
-				internal = false;
-			}
-
-			// probably the /rustc/ part is not multiplatform safe
-			if !internal && solvable && !filename.starts_with("/rustc/")
-			{
-				returning.push(hbacktrace {
-					funcName: name,
-					fileName: filename,
-					line,
-				});
-			}
 			true
 		});
 		

@@ -1,5 +1,5 @@
 use time::OffsetDateTime;
-use crate::components::backtrace::Backtrace;
+use crate::components::hbacktrace::Hbacktrace;
 use crate::components::context::Context;
 use crate::components::level::Level;
 
@@ -11,7 +11,7 @@ pub struct OneTrace
 	pub context: Context,
 	pub filename: String,
 	pub fileline: u32,
-	pub backtraces: Vec<Backtrace>
+	pub backtraces: Vec<Hbacktrace>
 }
 
 impl OneTrace

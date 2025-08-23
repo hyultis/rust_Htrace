@@ -26,6 +26,10 @@ log_consumer = ["log"]
 # still need defining Htrace global context
 tracing_consumer = ["tracing-subscriber","tracing-log","tracing"]
 
+# used to debug backtrace with no information
+#[profile.test]
+#debug = 0
+
 [dependencies]
 time = { version = "0.3", features = ["macros", "formatting"] }
 anyhow = "1.0"
