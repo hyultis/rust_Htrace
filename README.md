@@ -118,6 +118,36 @@ fn main() {
 }
 ```
 
+Exemple of generated output:
+
+```terminaloutput
+20:30:31.964329      (MAIN, tests/trace.rs:l39) : machin
+20:30:31.964397      (MAIN, span lvl 1, tests/trace.rs:l46) : test inside span 1
+20:30:31.964431      (MAIN, span lvl 2, tests/trace.rs:l49) : test inside span 2
+20:30:31.964725      (MAIN, span lvl 1, tests/trace.rs:l51) : test inside span 1
+20:30:31.964774      (MAIN, tests/trace.rs:l55) : test macro 87
+20:30:31.964801 DBUG (MAIN, tests/trace.rs:l58) : my debug
+20:30:31.964819 NOTI (MAIN, tests/trace.rs:l59) : my trace
+20:30:32.315810 ERR  (MAIN, tests/trace.rs:l60) : 21, with : 
+ | /Htrace/tests/trace.rs(60): trace::trace()
+ | /Htrace/tests/trace.rs(16): trace::trace::{{closure}}()
+ | /rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs(250): core::ops::function::FnOnce::call_once()
+ | ./nptl/pthread_create.c(448): start_thread
+ | ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S(78): __GI___clone3
+20:30:32.316116 FATA (MAIN, tests/trace.rs:l61) : test macro 87, with : 
+ | /Htrace/tests/trace.rs(61): trace::trace()
+ | /Htrace/tests/trace.rs(16): trace::trace::{{closure}}()
+ | /rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs(250): core::ops::function::FnOnce::call_once()
+ | ./nptl/pthread_create.c(448): start_thread
+ | ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S(78): __GI___clone3
+20:30:32.316357 ERR  (MAIN, tests/trace.rs:l65) : File error is : No such file or directory (os error 2), with : 
+ | /Htrace/tests/trace.rs(65): trace::trace()
+ | /Htrace/tests/trace.rs(16): trace::trace::{{closure}}()
+ | /rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs(250): core::ops::function::FnOnce::call_once()
+ | ./nptl/pthread_create.c(448): start_thread
+ | ./misc/../sysdeps/unix/sysv/linux/x86_64/clone3.S(78): __GI___clone3
+```
+
 you can also check tests.
 
 ## License
