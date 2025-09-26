@@ -94,13 +94,13 @@ impl Level
 	}
 
 	/// return the lowest possible level (DEBUG)
-	pub fn min(&self) -> Level
+	pub fn min() -> Level
 	{
 		Level::DEBUG
 	}
 
 	/// return max possible level (FATAL)
-	pub fn max(&self) -> Level
+	pub fn max() -> Level
 	{
 		Level::FATAL
 	}

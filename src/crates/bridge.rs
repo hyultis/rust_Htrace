@@ -26,8 +26,8 @@ impl Default for HtraceBridgeSpanFilterList {
 
 #[derive(Clone)]
 pub struct HtraceBridge {
-	/// minimum level for backtrace (default warn)
-	min_level_backtrace: Level,
+	/// minimum level for backtrace (default warn, use None to disable, use Some(Level::min()) to enable all)
+	pub min_level_backtrace: Option<Level>,
 
 	/// Htrace.level::DEBUG is the minimum level (that must be set here), correspond to: Log.level::Trace is the maximum level
 	#[cfg(feature = "log_consumer")]
@@ -45,7 +45,11 @@ impl HtraceBridge {
 
 	/// return if a level is a backtrace level (equal or above the "min_level_backtrace")
 	pub fn isBacktrace(&self, level: &Level) -> bool {
-		return level.tou8() >= self.min_level_backtrace.tou8();
+		if let Some(backtracelevel) = self.min_level_backtrace
+		{
+			return level.tou8() >= backtracelevel.tou8();
+		}
+		return false;
 	}
 
 
@@ -98,7 +102,7 @@ impl HtraceBridge {
 impl Default for HtraceBridge {
 	fn default() -> Self {
 		HtraceBridge {
-			min_level_backtrace: Level::WARNING,
+			min_level_backtrace: Some(Level::WARNING),
 			#[cfg(feature = "log_consumer")]
 			log_min_level: Level::DEBUG,
 			#[cfg(feature = "tracing_consumer")]

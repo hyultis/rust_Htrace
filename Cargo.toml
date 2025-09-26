@@ -12,7 +12,7 @@ description = "simple tracing system"
 
 
 [features]
-default = ["default_module","tracing_consumer"]
+default = ["default_module"]
 # this feature enables creating a module config from a hconfig, activate default_module
 hconfig = ["Hconfig", "default_module"]
 # this feature enable default module (those in modules src/modules dir)
