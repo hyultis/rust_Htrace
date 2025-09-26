@@ -3,14 +3,15 @@
 #![allow(unused_parens)]
 
 extern crate core;
+extern crate alloc;
 
-pub mod HTracer;
-pub mod File;
-pub mod CommandLine;
-pub mod ModuleAbstract;
-pub mod Type;
-mod OneLog;
-pub mod backtrace;
+pub mod htracer;
+pub mod modules;
+pub mod components;
+mod thread_manager;
+mod context_manager;
+
+pub mod crates;
 
 use thiserror::Error;
 
@@ -20,154 +21,89 @@ pub enum Errors
 	#[error("'module/{0}' not found in config")]
 	CannotFoundConfigNode(String),
 	#[error("module '{0}' configuration returned a error : {1}")]
-	ModuleConfigError(String,#[source] anyhow::Error)
+	ModuleConfigError(String,#[source] anyhow::Error),
 }
 
-/// shortcut for the log fonction (default to Type::NORMAL)
-/// can be use like that :
+/// Shortcut for the trace function (defaults to Type::NORMAL)
+/// It can be used like this:
 /// ```
 /// use Htrace::HTrace;
-/// use Htrace::Type::Type;
+/// use Htrace::components::level::Level;
 ///
 /// let myvar = 42;
 /// HTrace!(myvar);
 /// HTrace!("this is : {}",myvar);
-/// HTrace!((Type::DEBUG) myvar);
-/// HTrace!((Type::DEBUG) "this is : {}",myvar);
+/// HTrace!((Level::DEBUG) myvar);
+/// HTrace!((Level::DEBUG) "this is : {}",myvar);
 ///
 /// ```
 ///
-/// Note : actually, the data need to be a string or have "Debug" trait (adding "Display" when [chalk](https://rust-lang.github.io/chalk/book/) is added in stable)
+/// Note: Currently, the data needs to be a string, a &str, or something that implements "Display" or "Debug".
 #[macro_export]
 macro_rules! HTrace
 {
     ($a:expr) => {
-	    $crate::HTracer::HTracer::log(&$a, $crate::Type::Type::NORMAL, file!(), line!())
+	    $crate::htracer::HTracer::trace(&$a, $crate::components::level::Level::NORMAL, file!(), line!(), vec![]);
     };
 	(($b:expr) $a:expr) => {
-		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
 		{
-	        $crate::HTracer::HTracer::logWithBacktrace(&$a, $b, file!(), line!(),$crate::backtrace!());
+	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()));
 		}
 		else
 		{
-	        $crate::HTracer::HTracer::log(&$a, $b, file!(), line!());
+	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(), vec![]);
 		}
     };
 	($a:expr $(,$arg:expr)*) => {
-	    $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $crate::Type::Type::NORMAL, file!(), line!())
+	    $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $crate::components::level::Level::NORMAL, file!(), line!(), vec![])
     };
 	(($b:expr) $a:expr $(,$arg:expr)*) => {
-		if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
+		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
 		{
-	        $crate::HTracer::HTracer::logWithBacktrace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::backtrace!())
+	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()))
 		}
 		else
 		{
-	        $crate::HTracer::HTracer::log(&format!($a,$($arg),*), $b, file!(), line!())
+	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(), vec![])
 		}
     };
 }
 
-/// shortcut for the log function for Result>Error (default to Type::ERROR)
-/// take a result, and if it in error, trace it.
-/// do nothing if result is ok
-/// this only make sense if you want to receive the error information for debugging
-/// can be use like that :
+/// Shortcut for the trace function for Result>Error (defaults to Type::ERROR)
+/// Takes a result, and if it is in error, traces it.
+/// Does nothing if the result is OK.
+/// This only makes sense if you want to receive the error information for debugging.
+/// Works like HTrace!()
+/// Can be used like this:
 /// ```
 /// use Htrace::HTraceError;
-/// use Htrace::Type::Type;
 ///
 /// let testerror = std::fs::File::open(std::path::Path::new("idontexist.muahahah"));
-/// HTraceError!(testerror);
-/// HTraceError!("this is : {}",testerror);
-/// HTraceError!((Type::DEBUG) testerror);
-/// HTraceError!((Type::DEBUG) "this is : {}",testerror);
+/// HTraceError!("file opening error : {}",testerror);
 ///
 /// ```
 #[macro_export]
 macro_rules! HTraceError
 {
 	($a:expr) => {
-		match $a {
-			Ok(_) => {}
-			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $crate::Type::Type::ERROR, file!(), line!(), $crate::backtrace!())
-			}
+		if let Err(errorToTrace) = $a {
+			$crate::HTrace!(($crate::components::level::Level::ERROR) errorToTrace);
 		}
     };
 	($desc:expr,$a:expr) => {
-		match $a {
-			Ok(_) => {}
-			Err(ref errorToTrace) => {
-	    		$crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $crate::Type::Type::ERROR, file!(), line!(), $crate::backtrace!())
-			}
+		if let Err(errorToTrace) = $a {
+			$crate::HTrace!(($crate::components::level::Level::ERROR) $desc,errorToTrace);
 		}
     };
 	(($b:expr) $a:expr) => {
-		match $a {
-			Ok(_) => {}
-			Err(ref errorToTrace) => {
-				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
-				{
-			        $crate::HTracer::HTracer::logWithBacktrace(&errorToTrace.to_string(), $b, file!(), line!(), $crate::backtrace!())
-				}
-				else
-				{
-			        $crate::HTracer::HTracer::log(&errorToTrace.to_string(), $b, file!(), line!())
-				}
-			}
+		if let Err(errorToTrace) = $a {
+			$crate::HTrace!(($b) errorToTrace);
 		}
     };
 	(($b:expr) $desc:expr,$a:expr) => {
-		match $a {
-			Ok(_) => {}
-			Err(ref errorToTrace) => {
-				if($b.tou8() >= $crate::Type::Type::ERROR.tou8())
-				{
-			        $crate::HTracer::HTracer::logWithBacktrace(&format!($desc,errorToTrace.to_string()), $b, file!(), line!(), $crate::backtrace!())
-				}
-				else
-				{
-			        $crate::HTracer::HTracer::log(&format!($desc,errorToTrace.to_string()), $b, file!(), line!())
-				}
-			}
+		if let Err(errorToTrace) = $a {
+			$crate::HTrace!(($b) $desc, errorToTrace);
 		}
     };
-}
-
-/// spawn a thread with a specific name "{filename}_{line}" by default, or a string on the first argument
-/// automatically set threadSetName inside
-#[macro_export]
-macro_rules! namedThread
-{
-	($a:expr) => {
-		{
-			let filename = file!();
-			let filename = filename.split('/').last().unwrap_or(filename);
-			let name = format!("{}/{}",filename,line!());
-		    std::thread::Builder::new().name(name.clone()).spawn(move ||{
-				$crate::HTracer::HTracer::threadSetName(name);
-				$a()
-			})
-		}
-    };
-	($b:expr,$a:expr) => {
-		{
-			let name = $b.to_string();
-		    std::thread::Builder::new().name(name.clone()).spawn(move ||{
-				$crate::HTracer::HTracer::threadSetName(name);
-				$a()
-			})
-		}
-    };
-}
-
-/// generate forced backtrace, it take some time
-#[macro_export]
-macro_rules! backtrace
-{
-	() => {
-		$crate::HTracer::HTracer::backtrace();
-	};
 }
