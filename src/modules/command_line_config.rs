@@ -46,10 +46,9 @@ impl Default for CommandLineConfig
 #[cfg(feature = "hconfig")]
 impl CommandLineConfig
 {
-	pub fn create_from_hconfig(configs: &mut JsonValue) -> Self
+	pub fn create_from_hconfig(configs: &mut JsonValue, mut newConfig: Self) -> Self
 	{
 		use crate::modules::utils_hconfig::setConfig_String;
-		let mut newConfig = Self::default();
 
 		let JsonValue::Object(config) = configs else { return newConfig };
 

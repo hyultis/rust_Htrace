@@ -7,7 +7,6 @@ use std::fs::create_dir;
 use std::path::Path;
 use Htrace::components::context::Context;
 use Htrace::components::level::Level;
-#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
 use Htrace::crates::bridge::HtraceBridge;
 use Htrace::HTrace;
 use Htrace::htracer::HTracer;
@@ -43,6 +42,7 @@ fn trace_with_hconfig()
 				.unwrap()
 				.value_get_mut("cmd")
 				.unwrap(),
+			CommandLineConfig::default()
 		)),
 	);
 	global_context.module_add(
@@ -53,6 +53,7 @@ fn trace_with_hconfig()
 				.unwrap()
 				.value_get_mut("file")
 				.unwrap(),
+			FileConfig::default()
 		)),
 	);
 	global_context.level_setMin(Some(Level::DEBUG));

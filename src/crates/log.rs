@@ -5,7 +5,6 @@ use crate::htracer;
 
 impl Log for HtraceBridge {
 	fn enabled(&self, _: &Metadata) -> bool {
-		println!("enabled");
 		true
 	}
 

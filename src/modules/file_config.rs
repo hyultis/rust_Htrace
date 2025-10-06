@@ -46,9 +46,8 @@ impl Default for FileConfig
 #[cfg(feature = "hconfig")]
 impl FileConfig
 {
-	pub fn create_from_hconfig(configs: &mut JsonValue) -> Self
+	pub fn create_from_hconfig(configs: &mut JsonValue, mut newConfig: Self) -> Self
 	{
-		let mut newConfig = Self::default();
 		use crate::modules::utils_hconfig::{setConfig_String, setConfig_boolean};
 		use Hconfig::tinyjson::JsonValue;
 
