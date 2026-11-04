@@ -184,7 +184,16 @@ fn file_output()
 	HTracer::globalContext_set(context);
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 	HTracer::globalContext_set(context, HtraceBridge::default());
-	for name in ["producer-one", "producer-two", "../escape\\name", "%2E%2E"]
+	for name in [
+		"producer-one",
+		"producer-two",
+		"../escape\\name",
+		"%2E%2E",
+		"_2E_2E",
+		"Async Compute Task Pool (0)",
+		"Async%20Compute%20Task%20Pool%20%280%29",
+		"Équipe 東京 (1)",
+	]
 	{
 		std::thread::Builder::new()
 			.name(name.to_string())
@@ -195,13 +204,25 @@ fn file_output()
 			.join()
 			.unwrap();
 	}
+	// Unnamed producers share MAIN, without exposing their numeric ThreadId.
+	for _ in 0..2
+	{
+		std::thread::spawn(|| {
+			HTrace!("unnamed payload");
+		})
+		.join()
+		.unwrap();
+	}
 	HTracer::flush_timeout(Duration::from_secs(5)).unwrap();
-	assert_eq!(producerFiles.stats().linesWritten, 4);
+	assert_eq!(producerFiles.stats().linesWritten, 10);
 	for prefix in [
 		"producer-one_",
 		"producer-two_",
-		"%2E%2E%2Fescape%5Cname_",
-		"%252E%252E_",
+		"___escape_name_",
+		"_2E_2E_",
+		"Async Compute Task Pool (0)_",
+		"Async_20Compute_20Task_20Pool_20_280_29_",
+		"Équipe 東京 (1)_",
 	]
 	{
 		let entries = std::fs::read_dir(&producerPath)
@@ -214,10 +235,31 @@ fn file_output()
 			.unwrap();
 		assert_eq!(
 			std::fs::read_to_string(producerPath.join(filename)).unwrap(),
-			"producer payload\n"
+			if prefix == "_2E_2E_"
+			{
+				"producer payload\nproducer payload\n"
+			}
+			else
+			{
+				"producer payload\n"
+			}
 		);
 	}
-	assert_eq!(std::fs::read_dir(&producerPath).unwrap().count(), 4);
+	let mainFile = std::fs::read_dir(&producerPath)
+		.unwrap()
+		.map(|entry| entry.unwrap().path())
+		.find(|path| {
+			path.file_name()
+				.unwrap()
+				.to_string_lossy()
+				.starts_with("MAIN_")
+		})
+		.unwrap();
+	assert_eq!(
+		std::fs::read_to_string(mainFile).unwrap(),
+		"unnamed payload\nunnamed payload\n"
+	);
+	assert_eq!(std::fs::read_dir(&producerPath).unwrap().count(), 8);
 	HTracer::shutdown_timeout(Duration::from_secs(5)).unwrap();
 	assert_eq!(producerFiles.stats().flushErrors, 0);
 

@@ -19,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - File and console error counters, concurrency/lifecycle/macro/file regression tests, feature matrix and reproducible benchmarks.
 
 ### Fixed
+- Unnamed producers use `MAIN` instead of numeric thread IDs; generated filenames preserve readable spaces and parentheses in thread names.
 - `log_consumer` standalone compilation and optional test feature gates; duplicate test execution removed.
 - Context callbacks and destructors run outside manager locks; malformed Hconfig scalar values fall back to defaults.
 - Console write errors no longer panic through `println!`.
@@ -30,7 +31,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `HTracer::drop()` is removed; call `HTracer::shutdown()` and handle its result.
 - The conditional `globalContext_set` signature is unchanged.
 - Shutdown is terminal; context clone destruction no longer emits exit events.
-- File handles may survive external rename/unlink until eviction; filenames encode unsafe producer-name bytes.
+- File handles may survive external rename/unlink until eviction; filenames replace unsafe producer-name characters with `_`. Names that become identical share a file.
 - Plain string expressions remain literal; formatted calls use explicit formatting syntax.
 
 ## [2.0.1] — 2025-10-06

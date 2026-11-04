@@ -114,7 +114,9 @@ level through `CommandLineConfig::colors`; an empty map disables coloring.
 ## Outputs and features
 
 `CommandLine` writes colored stdout. `File` writes logs by date/hour, producer
-name or source file, or to a shared file. Both have customizable formats.
+name or source file, or to a shared file. Unnamed threads share `MAIN`; spaces
+and parentheses are preserved in filenames, and unsafe characters become `_`.
+Both outputs have customizable formats.
 Implement `ModuleAbstract` to add an output.
 
 | Feature | Purpose |

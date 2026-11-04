@@ -31,7 +31,7 @@ impl ThreadManager
 			thread
 				.name()
 				.map(str::to_owned)
-				.unwrap_or_else(|| format!("{:?}", thread.id()))
+				.unwrap_or_else(|| MAIN_THREAD.to_owned())
 		});
 	}
 

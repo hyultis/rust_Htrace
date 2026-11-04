@@ -12,12 +12,12 @@ after more recent traces.
 `byThreadId` retains its historical semantics based on the producer's **name**,
 retrieved from `trace.context.threadName_get()`. Two producers with the same
 name share their destination. The worker's name no longer selects the file.
-Producer names are encoded by UTF-8 byte: only ASCII alphanumeric characters,
-`_`, and `-` are preserved; all others become `%XX` (including `%`). Thus
-`../escape\\name` becomes `%2E%2E%2Fescape%5Cname`, with no separator or `..`
-segment and no collisions caused by simple character replacement. As before,
+Producer names preserve Unicode alphanumeric characters, `_`, `-`, spaces,
+and parentheses; all other characters become `_`. Unnamed producers share the
+`MAIN` destination. For example, `../escape\name` becomes `___escape_name`,
+with no separator or `..` segment. Names that become identical share a file. As before,
 the source name is reduced to the segment before the first dot in the final
-path component, then encoded in the same way. `FileConfig.path` and
+path component, then sanitized in the same way. `FileConfig.path` and
 `forceInOneFile` remain paths explicitly chosen by the caller; they do not
 provide a confinement boundary against a hostile configuration.
 

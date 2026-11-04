@@ -63,9 +63,13 @@ be delivered. Never-installed contexts have no logical exit notification.
 
 `FileConfig` supports a shared file, files per source or producer name, and daily
 or hourly suffixes. Options can be combined. With all destinations disabled,
-no file is written. `byThreadId` selects files by the producer’s captured thread name. Unsafe name bytes
-are percent-encoded in generated filename components. Explicit configuration
-paths remain application-controlled.
+no file is written. `byThreadId` selects files by the producer’s captured thread
+name, falling back to `MAIN` for unnamed threads. Spaces and parentheses remain
+readable (for example, `Async Compute Task Pool (0)_20261104.trc`). Letters and
+numbers, including Unicode, and `_` and `-` are also preserved. All other
+characters are replaced with `_`, including path separators and `%`. Names
+that become identical share a file. Explicit configuration paths remain
+application-controlled.
 
 Files use `write_all()` with a cache of at most 16 open handles per module.
 There is no userspace BufWriter buffer. Rotation uses each trace's timestamp;

@@ -129,22 +129,20 @@ impl File
 		}
 	}
 
-	// Encode bytes injectively: '%' is encoded too, so producer names cannot
-	// introduce separators, dot segments, or collide through simple replacement.
+	// Keep readable names without allowing separators or dot segments.
+	// Names that sanitize to the same component intentionally share a file.
 	fn filenameComponent(name: &str) -> String
 	{
 		let mut component = String::new();
-		for byte in name.bytes()
+		for character in name.chars()
 		{
-			if byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'
+			if character.is_alphanumeric() || matches!(character, '_' | '-' | ' ' | '(' | ')')
 			{
-				component.push(char::from(byte));
+				component.push(character);
 			}
 			else
 			{
-				use std::fmt::Write as _;
-				// Writing formatted bytes to a String cannot fail.
-				let _ = write!(&mut component, "%{byte:02X}");
+				component.push('_');
 			}
 		}
 		component
@@ -356,6 +354,22 @@ mod tests
 			{
 				Ok(())
 			}
+		}
+	}
+
+	#[test]
+	fn filename_characters_are_readable_and_contained()
+	{
+		assert_eq!(
+			File::filenameComponent("Équipe 東京 (0)"),
+			"Équipe 東京 (0)"
+		);
+		assert_eq!(File::filenameComponent("../escape\\name"), "___escape_name");
+		for character in [
+			'/', '\\', '.', ':', '*', '?', '"', '<', '>', '|', '%', '\0', '\n', '\r', '\t',
+		]
+		{
+			assert_eq!(File::filenameComponent(&format!("a{character}b")), "a_b");
 		}
 	}
 

@@ -242,7 +242,7 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 						let producerName = current
 							.name()
 							.map(str::to_owned)
-							.unwrap_or_else(|| format!("{:?}", current.id()));
+							.unwrap_or_else(|| "MAIN".to_owned());
 						let message = format!("producer-{:?}-{index}", current.id());
 						let mut context: Context = message.clone().into();
 						context.level_setMin(Some(Level::NORMAL));
