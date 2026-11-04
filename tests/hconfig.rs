@@ -1,34 +1,37 @@
+#![cfg(feature = "hconfig")]
 #![allow(unused_parens)]
 
-use std::fs;
 use Hconfig::HConfigManager::HConfigManager;
 use Hconfig::IO::json::WrapperJson;
-use std::fs::create_dir;
-use std::path::Path;
-use Htrace::components::context::Context;
-use Htrace::components::level::Level;
-use Htrace::crates::bridge::HtraceBridge;
-use Htrace::HTrace;
-use Htrace::htracer::HTracer;
-use Htrace::modules::{command_line, file};
-use Htrace::modules::command_line_config::CommandLineConfig;
-use Htrace::modules::file_config::FileConfig;
+use htrace::HTrace;
+use htrace::components::context::Context;
+use htrace::components::level::Level;
+#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
+use htrace::crates::bridge::HtraceBridge;
+use htrace::htracer::HTracer;
+use htrace::modules::command_line_config::CommandLineConfig;
+use htrace::modules::file_config::FileConfig;
+use htrace::modules::{command_line, file};
+use std::fs;
 
 #[test]
 fn trace_with_hconfig()
 {
-	let _ = fs::remove_dir_all("./traces");
+	let testPath = std::env::temp_dir().join(format!(
+		"htrace-hconfig-{}-{}",
+		std::process::id(),
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	let configPath = testPath.join("config");
+	fs::create_dir_all(&configPath).unwrap();
+	let mut fileConfig = FileConfig::default();
+	fileConfig.path = testPath.join("traces").to_string_lossy().into_owned();
 
-
-	// hconfig creating config dir
-	let config_dir = Path::new("./config");
-	if (!config_dir.exists())
-	{
-		create_dir(config_dir).unwrap();
-	}
-
-	// initialising hconfig and htrace config
-	HConfigManager::singleton().confPath_set("./config");
+	// Each integration test binary owns its singleton and temporary configuration.
+	HConfigManager::singleton().confPath_set(configPath.to_str().unwrap());
 	HConfigManager::singleton()
 		.create::<WrapperJson>("htrace")
 		.expect("bug from hconfig");
@@ -42,7 +45,7 @@ fn trace_with_hconfig()
 				.unwrap()
 				.value_get_mut("cmd")
 				.unwrap(),
-			CommandLineConfig::default()
+			CommandLineConfig::default(),
 		)),
 	);
 	global_context.module_add(
@@ -53,13 +56,13 @@ fn trace_with_hconfig()
 				.unwrap()
 				.value_get_mut("file")
 				.unwrap(),
-			FileConfig::default()
+			fileConfig,
 		)),
 	);
 	global_context.level_setMin(Some(Level::DEBUG));
-	#[cfg(all(not(feature = "tracing_consumer"),not(feature = "log_consumer")))]
+	#[cfg(all(not(feature = "tracing_consumer"), not(feature = "log_consumer")))]
 	HTracer::globalContext_set(global_context);
-	#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
+	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 	HTracer::globalContext_set(global_context, HtraceBridge::default());
 
 	// simple trace of variable
@@ -67,5 +70,6 @@ fn trace_with_hconfig()
 	HTrace!(string_test);
 
 	// we need to wait all threads are done
-	HTracer::drop();
+	HTracer::shutdown().unwrap();
+	fs::remove_dir_all(&testPath).unwrap();
 }

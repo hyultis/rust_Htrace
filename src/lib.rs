@@ -1,15 +1,14 @@
 #![allow(non_snake_case)]
-#![allow(dead_code)]
 #![allow(unused_parens)]
 
-extern crate core;
 extern crate alloc;
+extern crate core;
 
+pub mod components;
+mod context_manager;
 pub mod htracer;
 pub mod modules;
-pub mod components;
 mod thread_manager;
-mod context_manager;
 
 pub mod crates;
 
@@ -21,89 +20,85 @@ pub enum Errors
 	#[error("'module/{0}' not found in config")]
 	CannotFoundConfigNode(String),
 	#[error("module '{0}' configuration returned a error : {1}")]
-	ModuleConfigError(String,#[source] anyhow::Error),
+	ModuleConfigError(String, #[source] anyhow::Error),
 }
 
-/// Shortcut for the trace function (defaults to Type::NORMAL)
-/// It can be used like this:
+/// Trace a value (Debug + Any) or a formatted message, at NORMAL by default.
+/// Formatting and backtrace capture are skipped when the level is disabled.
+/// A single expression is raw: `HTrace!("val = {x}")` does not interpolate.
+/// Use `HTrace!("val = {}", x)` or `HTrace!("val = {x}",)` for formatting.
+/// Display-only and borrowed values work in the formatted form.
 /// ```
-/// use Htrace::HTrace;
-/// use Htrace::components::level::Level;
-///
-/// let myvar = 42;
-/// HTrace!(myvar);
-/// HTrace!("this is : {}",myvar);
-/// HTrace!((Level::DEBUG) myvar);
-/// HTrace!((Level::DEBUG) "this is : {}",myvar);
-///
+/// use htrace::{HTrace, components::level::Level};
+/// let value = 42;
+/// HTrace!(value);
+/// HTrace!("value = {}", value);
+/// HTrace!((Level::DEBUG) "value = {}", value);
 /// ```
-///
-/// Note: Currently, the data needs to be a string, a &str, or something that implements "Display" or "Debug".
 #[macro_export]
 macro_rules! HTrace
 {
-    ($a:expr) => {
-	    $crate::htracer::HTracer::trace(&$a, $crate::components::level::Level::NORMAL, file!(), line!(), vec![]);
-    };
-	(($b:expr) $a:expr) => {
-		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
+	(($level:expr) $fmt:expr, $($args:tt)*) => {{
+		let __htrace_level = $level;
+		if $crate::htracer::HTracer::enabled(__htrace_level)
 		{
-	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()));
+			let __htrace_backtrace = if __htrace_level.tou8() >= $crate::components::level::Level::ERROR.tou8()
+			{
+				$crate::htracer::HTracer::backtrace(file!())
+			}
+			else { ::std::vec::Vec::new() };
+			$crate::htracer::HTracer::trace_display(&format_args!($fmt, $($args)*), __htrace_level, file!(), line!(), __htrace_backtrace);
 		}
-		else
+	}};
+	(($level:expr) $value:expr) => {{
+		let __htrace_level = $level;
+		if $crate::htracer::HTracer::enabled(__htrace_level)
 		{
-	        $crate::htracer::HTracer::trace(&$a, $b, file!(), line!(), vec![]);
+			let __htrace_backtrace = if __htrace_level.tou8() >= $crate::components::level::Level::ERROR.tou8()
+			{
+				$crate::htracer::HTracer::backtrace(file!())
+			}
+			else { ::std::vec::Vec::new() };
+			$crate::htracer::HTracer::trace(&$value, __htrace_level, file!(), line!(), __htrace_backtrace);
 		}
-    };
-	($a:expr $(,$arg:expr)*) => {
-	    $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $crate::components::level::Level::NORMAL, file!(), line!(), vec![])
-    };
-	(($b:expr) $a:expr $(,$arg:expr)*) => {
-		if($b.tou8() >= $crate::components::level::Level::ERROR.tou8())
-		{
-	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(),$crate::htracer::HTracer::backtrace(file!()))
-		}
-		else
-		{
-	        $crate::htracer::HTracer::trace(&format!($a,$($arg),*), $b, file!(), line!(), vec![])
-		}
-    };
+	}};
+	($fmt:expr, $($args:tt)*) => {
+		$crate::HTrace!(($crate::components::level::Level::NORMAL) $fmt, $($args)*);
+	};
+	($value:expr) => {
+		$crate::HTrace!(($crate::components::level::Level::NORMAL) $value);
+	};
 }
 
-/// Shortcut for the trace function for Result>Error (defaults to Type::ERROR)
-/// Takes a result, and if it is in error, traces it.
-/// Does nothing if the result is OK.
-/// This only makes sense if you want to receive the error information for debugging.
-/// Works like HTrace!()
-/// Can be used like this:
+/// Log a Result's error by reference, at ERROR by default.
+/// The Result remains usable after the call. Its expression is evaluated once
+/// even when tracing is disabled; only formatting and backtrace are skipped.
+/// Errors use Debug unless a format string is provided.
 /// ```
-/// use Htrace::HTraceError;
-///
-/// let testerror = std::fs::File::open(std::path::Path::new("idontexist.muahahah"));
-/// HTraceError!("file opening error : {}",testerror);
-///
+/// use htrace::HTraceError;
+/// let result: Result<(), String> = Err("example".into());
+/// HTraceError!("error: {}", result);
+/// assert!(result.is_err());
 /// ```
 #[macro_export]
 macro_rules! HTraceError
 {
-	($a:expr) => {
-		if let Err(errorToTrace) = $a {
-			$crate::HTrace!(($crate::components::level::Level::ERROR) errorToTrace);
+	(($level:expr) $desc:expr, $result:expr) => {{
+		if let Err(__htrace_error) = &$result
+		{
+			$crate::HTrace!(($level) $desc, __htrace_error);
 		}
-    };
-	($desc:expr,$a:expr) => {
-		if let Err(errorToTrace) = $a {
-			$crate::HTrace!(($crate::components::level::Level::ERROR) $desc,errorToTrace);
+	}};
+	(($level:expr) $result:expr) => {{
+		if let Err(__htrace_error) = &$result
+		{
+			$crate::HTrace!(($level) "{:?}", __htrace_error);
 		}
-    };
-	(($b:expr) $a:expr) => {
-		if let Err(errorToTrace) = $a {
-			$crate::HTrace!(($b) errorToTrace);
-		}
-    };
-	(($b:expr) $desc:expr,$a:expr) => {
-		if let Err(errorToTrace) = $a {
-			$crate::HTrace!(($b) $desc, errorToTrace);
-		}
-    };
+	}};
+	($desc:expr, $result:expr) => {
+		$crate::HTraceError!(($crate::components::level::Level::ERROR) $desc, $result);
+	};
+	($result:expr) => {
+		$crate::HTraceError!(($crate::components::level::Level::ERROR) $result);
+	};
 }

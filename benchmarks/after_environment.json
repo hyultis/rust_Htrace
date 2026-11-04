@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "phase": "after",
+  "timestamp_utc": "2026-11-04T17:37:29.834502+00:00",
+  "source_git_head": "a051c12a50371c947878edf199caf013b80537a5",
+  "source_note": "Measured working tree, not asserted identical to HEAD; source/manifest/lock digests identify the measured tree.",
+  "source_rust_tree_sha256": "d1ab5c872475fa6276d955bcc7ab7778dadbc78cedc319a27ee55362e6a40d98",
+  "manifest_sha256": "fb859eb2dc9e8f8a3ca5ae2ba31a24e764b529062ea06fcf9e9effb078fc1645",
+  "lock_sha256": "5d3eafea10efe4c3d5629c1aa4f2e2dc2f3a39e945157ccef593971c7215c889",
+  "harness_sha256": "a2a79e366b81b7f42801babb0a06d10c6870da89711d11e782be67cc11fcc8b1",
+  "baseline_harness_sha256": "a2a79e366b81b7f42801babb0a06d10c6870da89711d11e782be67cc11fcc8b1",
+  "harness_exactly_matches_baseline": true,
+  "harness_note": "Same functional harness; formatting-only edits since the baseline were reported by the primary agent. Raw hashes may differ.",
+  "build": "cargo build --offline --locked --release --example benchmark",
+  "features": "default",
+  "profile": "release; default debug=0",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "kernel": "7.0.0-42-generic",
+  "architecture": "x86_64",
+  "cpu": "AMD Ryzen 9 9900X 12-Core Processor",
+  "timeout_seconds": 30,
+  "warmup_calls": 1,
+  "repetitions": 3,
+  "instant_overhead_subtracted": false,
+  "date_limit": "Baseline collected 2026-11-03; after collected 2026-11-04 on the same machine. Thermal state and background load were not controlled; builds/tests were excluded from concurrent measurement by orchestration.",
+  "dependency_note": "singletonThread direct dependency removed; external dependency pins preserved. Exact lock package differences recorded separately.",
+  "lock_difference": {
+    "available": true,
+    "removed_packages": [
+      [
+        "singletonThread",
+        "2.1.0",
+        "registry+https://github.com/rust-lang/crates.io-index"
+      ]
+    ],
+    "added_packages": []
+  },
+  "cargo_home": "/tmp/htrace-baseline.Q8sxFF/cargo-home",
+  "cargo_target_dir": "/tmp/htrace-target",
+  "completed_utc": "2026-11-04T17:37:31.418411+00:00",
+  "source_unchanged_during_measurement": true
+}

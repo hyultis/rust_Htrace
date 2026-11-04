@@ -1,8 +1,2 @@
-mod formater;
-mod trace;
-#[cfg(feature = "tracing_consumer")]
-mod tracing;
-#[cfg(feature = "log_consumer")]
-mod log;
-#[cfg(feature = "hconfig")]
-mod hconfig;
+// Cargo discovers each historical scenario as its own integration-test binary.
+// Do not include them here: that duplicates execution and shares terminal singletons.

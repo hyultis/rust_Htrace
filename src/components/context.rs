@@ -1,16 +1,20 @@
-use std::collections::HashMap;
-use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use crate::components::level::Level;
 use crate::modules::module_abstract::ModuleAbstract;
 use crate::thread_manager::ThreadManager;
+use std::collections::HashMap;
+use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 /// Context struct for trace.
 /// A context describe how a trace should be emitted.
 /// By default, a context are directly using its parent's data.
 ///
 /// A root context in a new thread use the global context as parent.
-/// The context withing the main thread as parent is the global context.
+/// Spans on every thread inherit from the global context.
+///
+/// A context is a configuration snapshot. Cloning, resolving or dropping one
+/// never emits a context-exit notification. Only a logical span exit or global
+/// configuration replacement schedules that notification on the trace worker.
 #[derive(Clone)]
 pub struct Context
 {
@@ -18,7 +22,7 @@ pub struct Context
 	_name: Option<String>,
 	_modules: HashMap<String, Option<Arc<dyn ModuleAbstract>>>,
 	_minlvl: Option<Level>,
-	_extras: HashMap<String,String>
+	_extras: HashMap<String, String>,
 }
 
 impl Context
@@ -26,14 +30,22 @@ impl Context
 	/// add a module to this context (and its childs default)
 	/// Overwrite if the name exist in this context.
 	/// Also overwrite all parent context with same name.
-	pub fn module_add(&mut self, name: impl Into<String>, module: impl ModuleAbstract + Sync + Send + 'static)
+	pub fn module_add(
+		&mut self,
+		name: impl Into<String>,
+		module: impl ModuleAbstract + Sync + Send + 'static,
+	)
 	{
 		let name = name.into();
 		self._modules.insert(name, Some(Arc::new(module)));
 	}
 
 	/// same as module_add, but with already and module in an "Arc"
-	pub fn module_add_arc(&mut self, name: impl Into<String>, module: Arc<dyn ModuleAbstract + Sync + Send + 'static>)
+	pub fn module_add_arc(
+		&mut self,
+		name: impl Into<String>,
+		module: Arc<dyn ModuleAbstract + Sync + Send + 'static>,
+	)
 	{
 		let name = name.into();
 		self._modules.insert(name, Some(module));
@@ -91,7 +103,7 @@ impl Context
 	/// set extra data
 	pub fn extra_set(&mut self, name: impl Into<String>, content: impl Into<String>)
 	{
-		self._extras.insert(name.into(),content.into());
+		self._extras.insert(name.into(), content.into());
 	}
 
 	/// get extra data
@@ -104,7 +116,9 @@ impl Context
 	/// merge extra
 	pub fn extra_merge(&mut self, other: &HashMap<String, String>)
 	{
-		other.iter().for_each(|(key,data)|{self._extras.insert(key.clone(),data.clone());});
+		other.iter().for_each(|(key, data)| {
+			self._extras.insert(key.clone(), data.clone());
+		});
 	}
 
 	/// get all extra
@@ -116,7 +130,8 @@ impl Context
 
 impl Default for Context
 {
-	fn default() -> Self {
+	fn default() -> Self
+	{
 		return Self {
 			_threadName: ThreadManager::local_getName(),
 			_name: None,
@@ -129,7 +144,8 @@ impl Default for Context
 
 impl Debug for Context
 {
-	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result
+	{
 		f.debug_struct("Context")
 			.field("name", &self._name)
 			.field("threadName", &self._threadName)
@@ -140,20 +156,10 @@ impl Debug for Context
 	}
 }
 
-impl Drop for Context
-{
-	fn drop(&mut self) {
-		self._modules.iter().for_each(|(_, module)| {
-			if let Some(module) = module {
-				module.event_onContextExit(&self);
-			}
-		})
-	}
-}
-
 impl Into<Context> for &str
 {
-	fn into(self) -> Context {
+	fn into(self) -> Context
+	{
 		let mut context = Context::default();
 		context.name_set(self);
 		context
@@ -162,7 +168,8 @@ impl Into<Context> for &str
 
 impl Into<Context> for String
 {
-	fn into(self) -> Context {
+	fn into(self) -> Context
+	{
 		let mut context = Context::default();
 		context.name_set(self);
 		context

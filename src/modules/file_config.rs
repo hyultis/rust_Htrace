@@ -8,7 +8,7 @@ pub struct FileConfig
 {
 	/// base path where to write files
 	pub path: String,
-	/// adding string when a trace have à return char "\n"/"\r"
+	/// String added after a newline or carriage return ("\n"/"\r") in a trace.
 	pub lineReturn: String,
 	/// format of the trace, view HtraceDefaultFormater for available variable
 	pub lineFormat: String,

@@ -10,7 +10,7 @@ pub struct CommandLineConfig
 {
 	/// color of level and message for each level
 	pub colors: HashMap<Level,Style>,
-	/// adding string when a trace have à return char "\n"/"\r"
+	/// String added after a newline or carriage return ("\n"/"\r") in a trace.
 	pub lineReturn: String,
 	/// format of the trace, view HtraceDefaultFormater for available variable
 	pub lineFormat: String,

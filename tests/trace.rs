@@ -1,21 +1,32 @@
+#![cfg(feature = "default_module")]
 #![allow(unused_parens)]
 
+use htrace::components::context::Context;
+use htrace::components::level::Level;
+#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
+use htrace::crates::bridge::HtraceBridge;
+use htrace::htracer::HTracer;
+use htrace::modules::command_line_config::CommandLineConfig;
+use htrace::modules::file_config::FileConfig;
+use htrace::modules::{command_line, file};
+use htrace::{HTrace, HTraceError, Spaned};
 use std::fs;
 use std::path::Path;
-use Htrace::components::context::Context;
-use Htrace::components::level::Level;
-#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
-use Htrace::crates::bridge::HtraceBridge;
-use Htrace::{HTrace, HTraceError, Spaned};
-use Htrace::htracer::HTracer;
-use Htrace::modules::{command_line, file};
-use Htrace::modules::command_line_config::CommandLineConfig;
-use Htrace::modules::file_config::FileConfig;
 
 #[test]
 fn trace()
 {
-	let _ = fs::remove_dir_all("./traces");
+	let tracePath = std::env::temp_dir().join(format!(
+		"htrace-trace-{}-{}",
+		std::process::id(),
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	fs::create_dir(&tracePath).unwrap();
+	let mut fileConfig = FileConfig::default();
+	fileConfig.path = tracePath.to_string_lossy().into_owned();
 
 	// updating lineFormat to check if context is working
 	let mut default_command_config = CommandLineConfig::default();
@@ -27,11 +38,11 @@ fn trace()
 		"cmd",
 		command_line::CommandLine::new(default_command_config),
 	);
-	global_context.module_add("file", file::File::new(FileConfig::default()));
+	global_context.module_add("file", file::File::new(fileConfig));
 	global_context.level_setMin(Some(Level::DEBUG));
-	#[cfg(all(not(feature = "tracing_consumer"),not(feature = "log_consumer")))]
+	#[cfg(all(not(feature = "tracing_consumer"), not(feature = "log_consumer")))]
 	HTracer::globalContext_set(global_context);
-	#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
+	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 	HTracer::globalContext_set(global_context, HtraceBridge::default());
 
 	// simple trace of variable
@@ -60,10 +71,11 @@ fn trace()
 	HTrace!((Level::ERROR) 21);
 	HTrace!((Level::FATAL) "test macro {}",87);
 
-	// macro for consuming Result, and tracing the error, default to ERROR
+	// Borrow the Result and trace its error, at ERROR by default.
 	let testerror = std::fs::File::open(Path::new("idontexist.muahahah"));
 	HTraceError!("File error is : {}", testerror);
 
 	// we need to wait all threads are done
-	HTracer::drop();
+	HTracer::shutdown().unwrap();
+	fs::remove_dir_all(&tracePath).unwrap();
 }

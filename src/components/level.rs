@@ -1,7 +1,7 @@
+use crate::components::trace::OneTrace;
+use crate::modules::module_abstract::ModuleAbstract;
 use std::fmt;
 use std::sync::Arc;
-use crate::modules::module_abstract::ModuleAbstract;
-use crate::components::trace::OneTrace;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Level
@@ -33,6 +33,8 @@ pub enum Level
 
 impl Level
 {
+	// Compatibility: this returns the full name; Display intentionally uses four characters.
+	#[allow(clippy::inherent_to_string_shadow_display)]
 	pub fn to_string(&self) -> String
 	{
 		match *self
@@ -44,10 +46,10 @@ impl Level
 			Level::NOTICE => "NOTICE".to_string(),
 			Level::NOTICEDERR => "NOTICEDERR".to_string(),
 			Level::WARNING => "WARNING".to_string(),
-			Level::NORMAL => "NORMAL".to_string()
+			Level::NORMAL => "NORMAL".to_string(),
 		}
 	}
-	
+
 	pub fn convert4LengthString(&self) -> String
 	{
 		match *self
@@ -59,10 +61,10 @@ impl Level
 			Level::NOTICE => "NOTI".to_string(),
 			Level::NOTICEDERR => "NOER".to_string(),
 			Level::WARNING => "WARN".to_string(),
-			Level::NORMAL => "    ".to_string()
+			Level::NORMAL => "    ".to_string(),
 		}
 	}
-	
+
 	pub fn tou8(&self) -> u8
 	{
 		match *self
@@ -77,7 +79,7 @@ impl Level
 			Level::FATAL => 7,
 		}
 	}
-	
+
 	pub fn launchModuleFunc(module: &Arc<dyn ModuleAbstract>, oneTrace: &OneTrace)
 	{
 		match oneTrace.level
@@ -89,7 +91,7 @@ impl Level
 			Level::NOTICE => module.event_onNotice(oneTrace),
 			Level::NOTICEDERR => module.event_onNoticeErr(oneTrace),
 			Level::WARNING => module.event_onWarning(oneTrace),
-			Level::NORMAL => module.event_onNormal(oneTrace)
+			Level::NORMAL => module.event_onNormal(oneTrace),
 		}
 	}
 
@@ -106,8 +108,10 @@ impl Level
 	}
 }
 
-impl fmt::Display for Level {
-	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+impl fmt::Display for Level
+{
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result
+	{
 		// The `f` value implements the `Write` trait, which is what the
 		// write! macro is expecting. Note that this formatting ignores the
 		// various flags provided to format strings.
@@ -117,7 +121,8 @@ impl fmt::Display for Level {
 
 impl From<u8> for Level
 {
-	fn from(value: u8) -> Self {
+	fn from(value: u8) -> Self
+	{
 		match value
 		{
 			0 => Level::DEBUG,
@@ -127,7 +132,7 @@ impl From<u8> for Level
 			4 => Level::NOTICEDERR,
 			5 => Level::WARNING,
 			6 => Level::ERROR,
-			_ => Level::FATAL
+			_ => Level::FATAL,
 		}
 	}
 }

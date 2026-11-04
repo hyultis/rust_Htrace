@@ -1,25 +1,36 @@
+#![cfg(all(feature = "tracing_consumer", feature = "default_module"))]
 #![allow(unused_parens)]
 
+use htrace::components::context::Context;
+use htrace::components::level::Level;
+use htrace::crates::bridge::HtraceBridge;
+use htrace::htracer::HTracer;
+use htrace::modules::command_line_config::CommandLineConfig;
+use htrace::modules::file_config::FileConfig;
+use htrace::modules::{command_line, file};
 use std::fs;
-use Htrace::components::context::Context;
-use Htrace::components::level::Level;
-use Htrace::crates::bridge::HtraceBridge;
-use Htrace::htracer::HTracer;
-use Htrace::modules::{command_line, file};
-use Htrace::modules::command_line_config::CommandLineConfig;
-use Htrace::modules::file_config::FileConfig;
 
 #[test]
 fn trace_from_tracing_crate()
 {
-	let _ = fs::remove_dir_all("./traces");
+	let tracePath = std::env::temp_dir().join(format!(
+		"htrace-tracing-{}-{}",
+		std::process::id(),
+		std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	fs::create_dir(&tracePath).unwrap();
+	let mut fileConfig = FileConfig::default();
+	fileConfig.path = tracePath.to_string_lossy().into_owned();
 
 	let mut global_context = Context::default();
 	global_context.module_add(
 		"cmd",
 		command_line::CommandLine::new(CommandLineConfig::default()),
 	);
-	global_context.module_add("file", file::File::new(FileConfig::default()));
+	global_context.module_add("file", file::File::new(fileConfig));
 	global_context.level_setMin(Some(Level::DEBUG));
 
 	HTracer::globalContext_set(global_context, HtraceBridge::default());
@@ -37,16 +48,17 @@ fn trace_from_tracing_crate()
 	let request = tracing::info_span!("request", method = %method, user_id = user_id, path = %path);
 
 	request.in_scope(|| {
-		tracing::info!("span withing tracing crate: start handling");            // visible (dans 'request')
+		tracing::info!("span withing tracing crate: start handling"); // visible (inside 'request')
 
 		let route = tracing::info_span!("route", name = "create_item");
 		route.in_scope(|| {
-			tracing::info!(count = 3, "span withing tracing crate: db query done"); // visible (dans 'request' -> 'route')
+			tracing::info!(count = 3, "span withing tracing crate: db query done"); // visible (inside 'request' -> 'route')
 		});
 
-		tracing::warn!("span withing tracing crate: handler a bit slow");        // visible (dans 'request')
+		tracing::warn!("span withing tracing crate: handler a bit slow"); // visible (inside 'request')
 	});
 
 	// we need to wait all threads are done
-	HTracer::drop();
+	HTracer::shutdown().unwrap();
+	fs::remove_dir_all(&tracePath).unwrap();
 }

@@ -1,4 +1,3 @@
-
 pub mod module_abstract;
 
 #[cfg(feature = "default_module")]
@@ -12,21 +11,26 @@ pub mod command_line;
 pub mod command_line_config;
 
 #[cfg(feature = "hconfig")]
-pub mod utils_hconfig {
-	use std::collections::HashMap;
+pub mod utils_hconfig
+{
 	use Hconfig::tinyjson::JsonValue;
+	use std::collections::HashMap;
 
 	/// try to get a string config from a Hconfig, if it exists, check the condition
 	/// if it exists and the condition is ok => set the module config value
 	/// else update/add the Hconfig value
-	pub fn setConfig_String(config: &mut HashMap<String, JsonValue>, key: &str, val: &mut String, condition: impl Fn(&str) -> bool)
+	pub fn setConfig_String(
+		config: &mut HashMap<String, JsonValue>,
+		key: &str,
+		val: &mut String,
+		condition: impl Fn(&str) -> bool,
+	)
 	{
-		if let Some(path) = config.get(key)
+		if let Some(JsonValue::String(tmp)) = config.get(key)
 		{
-			let tmp: String = path.clone().try_into().unwrap();
-			if (condition(tmp.as_str()))
+			if condition(tmp.as_str())
 			{
-				*val = tmp;
+				*val = tmp.clone();
 				return;
 			}
 		}
@@ -38,12 +42,38 @@ pub mod utils_hconfig {
 	/// else update/add the Hconfig value
 	pub fn setConfig_boolean(config: &mut HashMap<String, JsonValue>, key: &str, val: &mut bool)
 	{
-		if let Some(path) = config.get(key)
+		if let Some(JsonValue::Boolean(tmp)) = config.get(key)
 		{
-			let tmp: &bool = path.get().unwrap();
 			*val = *tmp;
 			return;
 		}
 		config.insert(key.to_string(), JsonValue::Boolean(*val));
+	}
+}
+#[cfg(all(test, feature = "hconfig"))]
+mod config_tests
+{
+	use super::utils_hconfig::*;
+	use Hconfig::tinyjson::JsonValue;
+	use std::collections::HashMap;
+
+	#[test]
+	fn malformed_values_restore_defaults_without_panicking()
+	{
+		let mut config = HashMap::from([
+			("path".into(), JsonValue::Boolean(false)),
+			("enabled".into(), JsonValue::String("wrong".into())),
+		]);
+		let mut path = String::from("default");
+		let mut enabled = true;
+		setConfig_String(&mut config, "path", &mut path, |_| true);
+		setConfig_boolean(&mut config, "enabled", &mut enabled);
+		assert_eq!(path, "default");
+		assert!(enabled);
+		assert!(matches!(config.get("path"), Some(JsonValue::String(value)) if value == "default"));
+		assert!(matches!(
+			config.get("enabled"),
+			Some(JsonValue::Boolean(true))
+		));
 	}
 }

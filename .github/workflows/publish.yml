@@ -1,28 +1,137 @@
-name: tests-and-publish
-run-name: Check code and publish new version on crate.io
-on: [workflow_dispatch]
+name: Check and publish
+run-name: Check Htrace (${{ github.event_name }})
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to crates.io after all checks (otherwise dry run only)
+        type: boolean
+        default: false
+      version:
+        description: Exact Cargo.toml version (required when publishing)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: htrace-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
+  RELEASE_TOOLCHAIN: '1.99.0'
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-    tests:
-      runs-on: ubuntu-latest
-      steps:
-        -   uses: actions/checkout@v4
-        -   name: Run cargo tests
-            run: cargo test --features hconfig --features tracing_consumer --features log_consumer
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ['1.97.0', '1.99.0']
+        features: [default, minimal, all]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Rust
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: tests-${{ matrix.toolchain }}-${{ matrix.features }}
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      - name: Run tests
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+          FEATURE_SET: ${{ matrix.features }}
+        run: |
+          args=()
+          case "$FEATURE_SET" in
+            minimal) args+=(--no-default-features) ;;
+            all) args+=(--all-features) ;;
+          esac
+          cargo +"$TOOLCHAIN" test --locked "${args[@]}"
 
-    publish:
-      runs-on: ubuntu-latest
-      needs: tests
-      environment: release  # Optional: for enhanced security
-      permissions:
-        id-token: write     # Required for OIDC token exchange
-      steps:
-        - uses: actions/checkout@v4
-        - uses: rust-lang/crates-io-auth-action@v1
-          id: auth
-        - run: cargo publish
-          env:
-            CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare Rust and Clippy
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          components: clippy
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: package-${{ env.RELEASE_TOOLCHAIN }}
+          cache-bin: false
+          save-if: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+      - name: Check release metadata
+        env:
+          PUBLISH_RELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'true' || 'false' }}
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python3 .github/scripts/check_release.py
+      - name: Check release guard regressions
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - name: Clippy
+        run: cargo +"$RELEASE_TOOLCHAIN" clippy --locked --all-targets --all-features
+      - name: Build public documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +"$RELEASE_TOOLCHAIN" doc --locked --no-deps --all-features
+      - name: Inspect crate contents
+        run: cargo +"$RELEASE_TOOLCHAIN" package --locked --list
+      - name: Verify package without uploading
+        run: cargo +"$RELEASE_TOOLCHAIN" publish --locked --dry-run
+
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.publish &&
+      github.repository == 'hyultis/rust_Htrace' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    needs: [tests, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Install release toolchain
+        run: rustup toolchain install "$RELEASE_TOOLCHAIN" --profile minimal --no-self-update
+      - name: Recheck release metadata
+        env:
+          PUBLISH_RELEASE: 'true'
+          EXPECTED_VERSION: ${{ inputs.version }}
+        run: python3 .github/scripts/check_release.py
+      - name: Obtain a short-lived crates.io token
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: Publish the checked revision
+        # The same SHA and locked dependencies were built by the unprivileged
+        # package job. Do not run dependency build scripts in this OIDC job.
+        run: cargo +"$RELEASE_TOOLCHAIN" publish --locked --no-verify
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

@@ -3,6 +3,36 @@
 All notable changes to this project are documented in this file.  
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] — Unreleased
+
+### Changed
+- One MPSC channel and one writer replace per-trace threads; FIFO insertion order replaces per-batch timestamp sorting.
+- Explicit flush/shutdown barriers with finite timeouts and observable diagnostics; shutdown closes the singleton permanently.
+- Context exits follow logical spans, not temporary clones; threads have isolated span stacks and inherited thresholds.
+- Macros filter before evaluation/formatting/backtrace capture and evaluate explicit levels once.
+- Backtraces walk and resolve the producer stack once with safe missing-symbol fallbacks.
+- File output uses producer names, complete writes and a bounded cache of 16 open handles.
+
+### Added
+- `enabled`, `flush`, `flush_timeout`, `shutdown`, `shutdown_timeout`, `stats`, `trace_display`, `trace_debug`.
+- A default module `flush()` hook.
+- File and console error counters, concurrency/lifecycle/macro/file regression tests, feature matrix and reproducible benchmarks.
+
+### Fixed
+- `log_consumer` standalone compilation and optional test feature gates; duplicate test execution removed.
+- Context callbacks and destructors run outside manager locks; malformed Hconfig scalar values fall back to defaults.
+- Console write errors no longer panic through `println!`.
+
+### Breaking changes
+- The Rust library target is now `htrace`: change imports from `Htrace::` to `htrace::`. The crates.io package remains `Htrace`.
+- Rust 1.97 is the minimum supported compiler version.
+- `HTraceError!` now borrows its Result in every form instead of consuming its error.
+- `HTracer::drop()` is removed; call `HTracer::shutdown()` and handle its result.
+- The conditional `globalContext_set` signature is unchanged.
+- Shutdown is terminal; context clone destruction no longer emits exit events.
+- File handles may survive external rename/unlink until eviction; filenames encode unsafe producer-name bytes.
+- Plain string expressions remain literal; formatted calls use explicit formatting syntax.
+
 ## [2.0.1] — 2025-10-06
 minor release.
 

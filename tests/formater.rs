@@ -1,22 +1,20 @@
 #![allow(unused_parens)]
 
-use std::fs;
+use htrace::components::context::Context;
+use htrace::components::formater::{FormaterCompile, FormaterParamBuilder};
+use htrace::components::level::Level;
+use htrace::components::trace::OneTrace;
+#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
+use htrace::crates::bridge::HtraceBridge;
+use htrace::htracer::HTracer;
 use time::macros::datetime;
-use Htrace::components::context::Context;
-use Htrace::components::formater::{FormaterCompile, FormaterParamBuilder};
-use Htrace::components::level::Level;
-use Htrace::components::trace::OneTrace;
-#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
-use Htrace::crates::bridge::HtraceBridge;
-use Htrace::htracer::HTracer;
 
 #[test]
 fn formater()
 {
-	let _ = fs::remove_dir_all("./traces");
-	#[cfg(all(not(feature = "tracing_consumer"),not(feature = "log_consumer")))]
+	#[cfg(all(not(feature = "tracing_consumer"), not(feature = "log_consumer")))]
 	HTracer::globalContext_set(Context::default());
-	#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
+	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 	HTracer::globalContext_set(Context::default(), HtraceBridge::default());
 
 	let compiled = FormaterCompile(
@@ -45,5 +43,5 @@ fn formater()
 	);
 
 	// we need to wait all threads are done
-	HTracer::drop();
+	HTracer::shutdown().unwrap();
 }

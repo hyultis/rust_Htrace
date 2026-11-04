@@ -6,21 +6,33 @@ use std::cell::RefCell;
 use std::thread::AccessError;
 
 /// used for storing thread name, useless for wasm
-pub struct ThreadManager
-{
-}
+pub struct ThreadManager {}
 
 impl ThreadManager
 {
-	thread_local!{
-        static NAME: RefCell<Option<String>> = RefCell::new(None);
-        static EXTRADATAS: RefCell<HashMap<String,String>> = RefCell::new(HashMap::new());
+	thread_local! {
+		static NAME: RefCell<Option<String>> = RefCell::new(None);
+		static EXTRADATAS: RefCell<HashMap<String,String>> = RefCell::new(HashMap::new());
 	}
 
 	/// get a local thread name
 	pub fn local_getName() -> Option<String>
 	{
-		return Self::NAME.try_with(|a| a.borrow().clone()).unwrap_or_else(|_| None)
+		return Self::NAME
+			.try_with(|a| a.borrow().clone())
+			.unwrap_or_else(|_| None);
+	}
+
+	/// Display name of the current trace producer; names never identify stacks.
+	pub(crate) fn local_producerName() -> String
+	{
+		return Self::local_getName().unwrap_or_else(|| {
+			let thread = std::thread::current();
+			thread
+				.name()
+				.map(str::to_owned)
+				.unwrap_or_else(|| format!("{:?}", thread.id()))
+		});
 	}
 
 	/// set a local thread name
@@ -32,15 +44,20 @@ impl ThreadManager
 	/// get local thread extra data
 	pub fn local_getExtraDatas(extraDataName: impl Into<String>) -> Option<String>
 	{
-		let extraDataName= extraDataName.into();
-		return Self::EXTRADATAS.try_with(|a| a.borrow().get(&extraDataName).cloned()).unwrap_or_else(|_| None);
+		let extraDataName = extraDataName.into();
+		return Self::EXTRADATAS
+			.try_with(|a| a.borrow().get(&extraDataName).cloned())
+			.unwrap_or_else(|_| None);
 	}
 
 	/// set local thread extra data
-	pub fn local_setExtraDatas(extraDataName: impl Into<String>, content: impl Into<String>) -> Result<Option<String>, AccessError>
+	pub fn local_setExtraDatas(
+		extraDataName: impl Into<String>,
+		content: impl Into<String>,
+	) -> Result<Option<String>, AccessError>
 	{
 		let extraDataName = extraDataName.into();
 		let content = content.into();
-		return Self::EXTRADATAS.try_with(|a| a.borrow_mut().insert(extraDataName,content));
+		return Self::EXTRADATAS.try_with(|a| a.borrow_mut().insert(extraDataName, content));
 	}
 }

@@ -1,9 +1,11 @@
-use std::collections::HashMap;
-use time::macros::format_description;
 use crate::components::trace::OneTrace;
 use regex::Regex;
+use std::collections::HashMap;
+use time::macros::format_description;
 
-pub const FORMATTER_VARIABLE: [&str; 8] = ["time","lvl","file","line","msg","thread","context","extra"];
+pub const FORMATTER_VARIABLE: [&str; 8] = [
+	"time", "lvl", "file", "line", "msg", "thread", "context", "extra",
+];
 
 pub type FormaterCompilerSignature = fn(formater: &String) -> FormaterCompiled;
 pub type FormaterParamBuilderSignature = fn(&OneTrace, &String) -> HashMap<String, String>;
@@ -20,26 +22,30 @@ impl FormaterCompiled
 	/// parameters is a simple array created with FormaterParamBuilder
 	pub fn render(&self, parameters: HashMap<String, String>) -> String
 	{
-		return self.inner.iter().map(|(previous,data)|{
+		let mut rendered = String::new();
+		for (previous, data) in &self.inner
+		{
+			rendered.push_str(previous);
 			if let Some(data) = data
 			{
-				match parameters.get(&data.data) {
-					None => {}
-					Some(content) => {
-						if(!content.is_empty()) {
-							return format!("{}{}{}{}", previous, data.prefix, parameters.get(&data.data).unwrap_or(&String::new()), data.suffix);
-						}
-					}
+				if let Some(content) = parameters
+					.get(&data.data)
+					.filter(|content| !content.is_empty())
+				{
+					rendered.push_str(&data.prefix);
+					rendered.push_str(content);
+					rendered.push_str(&data.suffix);
 				}
 			}
-			return previous.clone();
-		}).collect::<Vec<String>>().join("");
+		}
+		rendered
 	}
 }
 
 /// used to store data name, and also it's prefix/suffix
 #[derive(Debug)]
-pub struct FormaterData {
+pub struct FormaterData
+{
 	pub prefix: String,
 	pub data: String,
 	pub suffix: String,
@@ -55,99 +61,145 @@ pub fn FormaterCompile(formater: &String) -> FormaterCompiled
 {
 	let mut compiled = vec![];
 	let mut lastchar = 0;
-	let regexstr = format!(r"\{{({})(:([><])([^}}]+))?\}}", FORMATTER_VARIABLE.map(|var|{
-		if(var=="extra")
-		{
-			return r"extra\[([^\]]+)\]";
-		}
-		return var;
-	}).join("|"));
+	let regexstr = format!(
+		r"\{{({})(:([><])([^}}]+))?\}}",
+		FORMATTER_VARIABLE
+			.map(|var| {
+				if (var == "extra")
+				{
+					return r"extra\[([^\]]+)\]";
+				}
+				return var;
+			})
+			.join("|")
+	);
 	let regex = Regex::new(&regexstr).unwrap();
-	let _ = regex.replace_all(formater, |caps: &regex::Captures| {
-		let mut data = caps.get(1).unwrap().as_str().to_string();
-		let previous = &formater[lastchar..caps.get(0).unwrap().start()];
-		lastchar = caps.get(0).unwrap().end();
+	let _ = regex
+		.replace_all(formater, |caps: &regex::Captures| {
+			let mut data = caps.get(1).unwrap().as_str().to_string();
+			let previous = &formater[lastchar..caps.get(0).unwrap().start()];
+			lastchar = caps.get(0).unwrap().end();
 
-		//when extra
-		if(data.starts_with("extra"))
-		{
-			if let Some(extrakey) = caps.get(2)
+			//when extra
+			if (data.starts_with("extra"))
 			{
-				data=format!("extra:{}",extrakey.as_str());
-			}
-		}
-
-		// prefix/suffix
-		let mut prefix = "".to_string();
-		let mut suffix = "".to_string();
-		if let Some(indicator) = caps.get(4)
-		{
-			if let Some(affix) = caps.get(5)
-			{
-				if(indicator.as_str()=="<")
+				if let Some(extrakey) = caps.get(2)
 				{
-					prefix = affix.as_str().to_string();
-				}
-				else
-				{
-					suffix = affix.as_str().to_string();
+					data = format!("extra:{}", extrakey.as_str());
 				}
 			}
-		}
 
-		compiled.push((previous.to_string(), Some(FormaterData{
-			prefix: prefix,
-			data,
-			suffix: suffix,
-		})));
-		"".to_string()
-	}).into_owned();
+			// prefix/suffix
+			let mut prefix = "".to_string();
+			let mut suffix = "".to_string();
+			if let Some(indicator) = caps.get(4)
+			{
+				if let Some(affix) = caps.get(5)
+				{
+					if (indicator.as_str() == "<")
+					{
+						prefix = affix.as_str().to_string();
+					}
+					else
+					{
+						suffix = affix.as_str().to_string();
+					}
+				}
+			}
+
+			compiled.push((
+				previous.to_string(),
+				Some(FormaterData {
+					prefix: prefix,
+					data,
+					suffix: suffix,
+				}),
+			));
+			"".to_string()
+		})
+		.into_owned();
 
 	compiled.push((formater[lastchar..].to_string(), None));
 
-	return FormaterCompiled{ inner: compiled };
+	return FormaterCompiled { inner: compiled };
 }
-
 
 /// format a string in a simple way errorless
 /// you can replace it with FormaterParamBuilderSignature (and put in inside config of module)
 pub fn FormaterParamBuilder(trace: &OneTrace, lineReturn: &String) -> HashMap<String, String>
 {
 	let mut msg = trace.message.clone();
-	if(msg.contains("\n") || msg.contains("\r") || msg.contains("\\n") || msg.contains("\\r"))
+	if (msg.contains("\n") || msg.contains("\r") || msg.contains("\\n") || msg.contains("\\r"))
 	{
-		let linereturn = format!("\n{}",lineReturn);
-		msg = msg.replace("\n\r","\n");
-		msg = msg.replace("\\n\\r","\n");
-		msg = msg.replace("\r","\n");
-		msg = msg.replace("\\r","\n");
-		msg = msg.replace("\\n","\n");
-		msg = msg.replace("\n",linereturn.as_str());
+		let linereturn = format!("\n{}", lineReturn);
+		msg = msg.replace("\n\r", "\n");
+		msg = msg.replace("\\n\\r", "\n");
+		msg = msg.replace("\r", "\n");
+		msg = msg.replace("\\r", "\n");
+		msg = msg.replace("\\n", "\n");
+		msg = msg.replace("\n", linereturn.as_str());
 	}
 
-	if(trace.backtraces.len()>0)
+	if !trace.backtraces.is_empty()
 	{
-		let mut drawBacktraces= "".to_string();
-		trace.backtraces.iter().for_each(|one|{
-			drawBacktraces = format!("{}\n{}{}",drawBacktraces,lineReturn,one.to_string());
-		});
+		use std::fmt::Write;
+		let mut drawBacktraces = String::new();
+		for one in &trace.backtraces
+		{
+			let _ = write!(&mut drawBacktraces, "\n{lineReturn}{one}");
+		}
 
-		msg = format!("{}, with : {}",msg,drawBacktraces)
+		msg = format!("{}, with : {}", msg, drawBacktraces)
 	}
 
 	let mut parameters = HashMap::new();
 	let formatTime = format_description!("[hour repr:24]:[minute]:[second].[subsecond digits:6]");
-	parameters.insert("time".to_string(), trace.date.format(formatTime).unwrap_or("00:00:00.000000".to_string()));
+	parameters.insert(
+		"time".to_string(),
+		trace
+			.date
+			.format(formatTime)
+			.unwrap_or("00:00:00.000000".to_string()),
+	);
 	parameters.insert("lvl".to_string(), trace.level.convert4LengthString());
-	parameters.insert("thread".to_string(), trace.context.threadName_get().clone().unwrap_or("".to_string()));
-	parameters.insert("context".to_string(), trace.context.name_get().clone().unwrap_or("".to_string()));
+	parameters.insert(
+		"thread".to_string(),
+		trace
+			.context
+			.threadName_get()
+			.clone()
+			.unwrap_or("".to_string()),
+	);
+	parameters.insert(
+		"context".to_string(),
+		trace.context.name_get().clone().unwrap_or("".to_string()),
+	);
 	parameters.insert("file".to_string(), trace.filename.clone());
 	parameters.insert("line".to_string(), trace.fileline.to_string());
 
-	trace.context.extra_getAll().iter().for_each(|(key,data)|{
-		parameters.insert(format!("extra:{}",key), data.to_string());
+	trace.context.extra_getAll().iter().for_each(|(key, data)| {
+		parameters.insert(format!("extra:{}", key), data.to_string());
 	});
 
 	parameters.insert("msg".to_string(), msg);
 	return parameters;
+}
+#[cfg(test)]
+mod tests
+{
+	use super::*;
+
+	#[test]
+	fn conditional_affixes_and_unknown_tokens_are_preserved()
+	{
+		let compiled = FormaterCompile(&"a{context:<[}{context:>]}b{msg}c{unknown}".into());
+		assert_eq!(compiled.render(HashMap::new()), "abc{unknown}");
+		assert_eq!(
+			compiled.render(HashMap::from([
+				("context".into(), "x".into()),
+				("msg".into(), "hello".into())
+			])),
+			"a[xx]bhelloc{unknown}"
+		);
+	}
 }

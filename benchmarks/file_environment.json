@@ -1,0 +1,14 @@
+{
+  "timestamp_utc": "2026-11-03T18:44:32.088922+00:00",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "kernel": "7.0.0-42-generic",
+  "cpu": "AMD Ryzen 9 9900X 12-Core Processor",
+  "profile": "release, debug=0",
+  "filesystem": "temporary directory /tmp; OS page cache enabled; no fsync",
+  "harness_sha256": "4f6d84ed7698eefcae76634221ea341f59051663470f9fd366a07894b7ed295e",
+  "build": "CARGO_HOME=/tmp/htrace-baseline.Q8sxFF/cargo-home CARGO_TARGET_DIR=/tmp/htrace-target cargo build --offline --release --example file_benchmark",
+  "cache_limit": 16,
+  "buffer_capacity_bytes": 8192,
+  "repetitions": 3,
+  "warmup": "none; fresh file names per process; OS cache not dropped"
+}

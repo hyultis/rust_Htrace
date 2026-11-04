@@ -1,253 +1,377 @@
+use crate::components::context::Context;
+use crate::components::hbacktrace::Hbacktrace;
+use crate::components::level::Level;
+use crate::components::trace::OneTrace;
+use crate::context_manager::ContextManager;
+#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
+use crate::crates::bridge::HtraceBridge;
+use crate::thread_manager::{MAIN_THREAD, ThreadManager};
 use std::any::Any;
 use std::fmt::{Debug, Display};
-use crate::components::trace::OneTrace;
-use crate::components::level::Level;
-use std::sync::{OnceLock};
-use time::OffsetDateTime;
-use crate::components::hbacktrace::Hbacktrace;
-use crate::components::context::Context;
-use crate::context_manager::ContextManager;
-use crate::thread_manager::{ThreadManager, MAIN_THREAD};
-
-use std::{mem, thread};
-use std::thread::sleep;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use singletonThread::SingletonThread;
-use parking_lot::RwLock;
-#[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
-use crate::crates::bridge::HtraceBridge;
+use time::OffsetDateTime;
+
+mod worker;
+
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A control operation never waits past its timeout to join a blocked worker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ControlError
+{
+	#[error("Htrace has not been initialized")]
+	NotInitialized,
+	#[error("Htrace admission is closed")]
+	Closed,
+	#[error("Htrace worker is unavailable")]
+	Unavailable,
+	#[error("Htrace control operation timed out; the worker may still be running")]
+	Timeout,
+	#[error("Htrace control cannot wait from a worker callback")]
+	Reentrant,
+	#[error("an Htrace module callback or flush failed; inspect HTracer::stats()")]
+	ModuleFailed,
+}
+
+/// Cumulative diagnostics. Fields are sampled independently while producers run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Stats
+{
+	pub backtraces: u64,
+	pub backtraceErrors: u64,
+	pub accepted: u64,
+	pub processed: u64,
+	pub rejected: u64,
+	pub moduleErrors: u64,
+	pub workerErrors: u64,
+	/// Traces awaiting consumption, excluding the currently executing callback.
+	pub queued: u64,
+}
 
 pub struct HTracer
 {
-	_deferredTraces: RwLock<Vec<OneTrace>>,
-	_threadWriting: RwLock<SingletonThread>
+	runtime: worker::Runtime,
 }
 
-static CONTEXTSET: OnceLock<RwLock<bool>> = OnceLock::new();
+static BACKTRACES: AtomicU64 = AtomicU64::new(0);
+static BACKTRACE_ERRORS: AtomicU64 = AtomicU64::new(0);
+
+static BRIDGESET: OnceLock<()> = OnceLock::new();
 static SINGLETON: OnceLock<HTracer> = OnceLock::new();
 
 impl HTracer
 {
+	/// Accessing the singleton does not create a worker before configuration.
 	pub fn singleton() -> &'static HTracer
 	{
-		if(*CONTEXTSET.get_or_init(|| RwLock::new(false)).read() == false) {
-			panic!("[Htrace] globalContext_set() must be called before singleton()");
-		}
-
-		return SINGLETON.get_or_init(|| {
-			HTracer::new()
-		});
+		SINGLETON.get_or_init(|| HTracer {
+			runtime: worker::Runtime::default(),
+		})
 	}
-	
-	/// set (or override) the global context
-	/// rename the local thread to MAIN_THREAD
-	/// should only be call one time on the main thread before calling singleton() (another call will reset context)
-	/// in case of "log_consumer" or "tracing_consumer" features, define HtraceBridge between Htrace and log or tracing (only the first time, do not change if recalled).
-	pub fn globalContext_set(mut context: Context,
-	                         #[cfg(any(feature = "tracing_consumer",feature = "log_consumer"))]
-	                         bridge: HtraceBridge)
-	{
-		let contextSet = CONTEXTSET.get_or_init(|| RwLock::new(false));
 
-		if(context.threadName_get().is_none())
+	/// Set or override the global context. A completed shutdown is terminal;
+	/// later configuration does not restart the worker. Bridges install once.
+	pub fn globalContext_set(
+		mut context: Context,
+		#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))] bridge: HtraceBridge,
+	)
+	{
+		if context.threadName_get().is_none()
 		{
 			context.threadName_set(MAIN_THREAD);
 		}
+		let modules = context
+			.modules_get()
+			.values()
+			.flatten()
+			.map(Arc::downgrade)
+			.collect();
+		ContextManager::singleton().global_set(context);
+		ThreadManager::local_setName(MAIN_THREAD);
+		// A failed start is observable through workerErrors and control results.
+		let _ = Self::singleton().runtime.start(modules);
 
-		// auto define of the bridge is only done one time
-		if(*contextSet.read() == false)
-		{
+		BRIDGESET.get_or_init(|| {
 			#[cfg(feature = "log_consumer")]
 			{
-				if let Some(minlevel) = context.level_getMin()
-				{
-					log::set_max_level(crate::crates::log::LogHtraceToLogLevelMapper(minlevel).to_level_filter());
-				}
-
+				// Contexts may lower their threshold after installation.
+				log::set_max_level(log::LevelFilter::Trace);
 				if let Err(err) = log::set_boxed_logger(Box::new(bridge.clone()))
 				{
-					log::warn!("[Htrace] global default tracing-subscriber is already set : {}",err);
+					log::warn!("[Htrace] global default logger is already set : {}", err);
 				}
 			}
-
 			#[cfg(feature = "tracing_consumer")]
 			{
 				use tracing_subscriber::layer::SubscriberExt;
-
-				let subscriber = tracing_subscriber::Registry::default()
-					.with(bridge.filtered());
-
+				let subscriber = tracing_subscriber::Registry::default().with(bridge.filtered());
 				if let Err(err) = tracing::subscriber::set_global_default(subscriber)
 				{
-					tracing::warn!("[Htrace] global default tracing-subscriber is already set : {}",err);
+					tracing::warn!(
+						"[Htrace] global default tracing-subscriber is already set : {}",
+						err
+					);
 				}
 			}
-		}
-
-		ContextManager::singleton().global_set(context);
-		ThreadManager::local_setName(MAIN_THREAD);
-		*contextSet.write() = true;
-
-		// one call to atleast initiate the singleton
-		HTracer::singleton();
-
+		});
 	}
-	
-	pub fn trace<T>(rawEntry : &T, level: Level, file: &str, line: u32, backtraces: Vec<Hbacktrace>)
-		where T: Any + Debug // + ?Display
+
+	/// Fast eligibility check: no message, snapshot or backtrace is constructed.
+	/// Concurrent reconfiguration/closure can still reject a subsequent trace.
+	pub fn enabled(level: Level) -> bool
 	{
-		let anyEntry = rawEntry as &dyn Any;
-		let tmp = if let Some(content) = anyEntry.downcast_ref::<String>() {
-			content.to_string()
-		}
-		else
+		Self::singleton().runtime.is_accepting()
+			&& level.tou8() >= ContextManager::singleton().minimum_level().tou8()
+	}
+
+	/// Explicit Display path, including format_args! and borrowed values.
+	pub fn trace_display<T: Display + ?Sized>(
+		entry: &T,
+		level: Level,
+		file: &str,
+		line: u32,
+		backtraces: Vec<Hbacktrace>,
+	)
+	{
+		Self::trace_message(|| format!("{entry}"), level, file, line, backtraces);
+	}
+
+	/// Explicit Debug path for values containing non-static references.
+	pub fn trace_debug<T: Debug + ?Sized>(
+		entry: &T,
+		level: Level,
+		file: &str,
+		line: u32,
+		backtraces: Vec<Hbacktrace>,
+	)
+	{
+		Self::trace_message(|| format!("{entry:?}"), level, file, line, backtraces);
+	}
+
+	fn trace_message(
+		message: impl FnOnce() -> String,
+		level: Level,
+		file: &str,
+		line: u32,
+		backtraces: Vec<Hbacktrace>,
+	)
+	{
+		let tracer = Self::singleton();
+		if !tracer.runtime.is_accepting()
 		{
-			if let Some(content) = anyEntry.downcast_ref::<&str>()
-			{
-				content.to_string()
-			}
-			else
-			{
-				if let Some(content)= anyEntry.downcast_ref::<Box<dyn Display>>()
+			tracer.runtime.reject();
+			return;
+		}
+		if level.tou8() < ContextManager::singleton().minimum_level().tou8()
+		{
+			return;
+		}
+		let date = OffsetDateTime::now_utc();
+		let context = ContextManager::singleton().resolve();
+		tracer.runtime.send_trace(OneTrace {
+			message: message(),
+			date,
+			level,
+			context,
+			filename: file.to_owned(),
+			fileline: line,
+			backtraces,
+		});
+	}
+
+	/// Compatibility path for owned/static Debug values. Use trace_display or
+	/// trace_debug for borrowed values, or a formatted HTrace! invocation.
+	pub fn trace<T: Any + Debug>(
+		rawEntry: &T,
+		level: Level,
+		file: &str,
+		line: u32,
+		backtraces: Vec<Hbacktrace>,
+	)
+	{
+		Self::trace_message(
+			|| {
+				let entry = rawEntry as &dyn Any;
+				if let Some(content) = entry.downcast_ref::<String>()
 				{
-					format!("{}", content)
+					content.clone()
+				}
+				else if let Some(content) = entry.downcast_ref::<&str>()
+				{
+					(*content).to_owned()
 				}
 				else
 				{
-					format!("{:?}", rawEntry)
+					format!("{rawEntry:?}")
 				}
-			}
-		};
-
-		let context = ContextManager::singleton().resolve();
-		if(level.tou8() < context.level_getMin().unwrap_or(&Level::DEBUG).tou8()) {
-			return;
-		}
-
-		let trace = OneTrace {
-			message: tmp.clone(),
-			date: OffsetDateTime::now_utc(),
+			},
 			level,
-			context,
-			filename: file.to_string(),
-			fileline: line,
+			file,
+			line,
 			backtraces,
-		};
-
-		thread::spawn(move ||{
-			Self::singleton()._deferredTraces.write().push(trace);
-			Self::singleton()._threadWriting.write().thread_launch_delayabe();
-		});
+		);
 	}
-	
+
+	/// Flush traces inserted before this barrier and their modules. Producers
+	/// may continue. No fsync is promised. Any prior module failure is reported.
+	pub fn flush() -> Result<(), ControlError>
+	{
+		Self::flush_timeout(CONTROL_TIMEOUT)
+	}
+
+	pub fn flush_timeout(timeout: Duration) -> Result<(), ControlError>
+	{
+		Self::singleton().runtime.flush(timeout)
+	}
+
+	/// Close admission, drain accepted traces, flush and notify living modules.
+	/// Repeated calls observe the same completion. A timeout does not kill I/O.
+	/// Shutting down before initialization also closes admission permanently.
+	pub fn shutdown() -> Result<(), ControlError>
+	{
+		Self::shutdown_timeout(CONTROL_TIMEOUT)
+	}
+
+	pub fn shutdown_timeout(timeout: Duration) -> Result<(), ControlError>
+	{
+		Self::singleton().runtime.shutdown(timeout)
+	}
+
+	pub fn stats() -> Stats
+	{
+		{
+			let mut stats = Self::singleton().runtime.stats();
+			stats.backtraces = BACKTRACES.load(Ordering::Relaxed);
+			stats.backtraceErrors = BACKTRACE_ERRORS.load(Ordering::Relaxed);
+			stats
+		}
+	}
+
+	pub(crate) fn context_exit(context: Context)
+	{
+		Self::singleton().runtime.context_exit(context);
+	}
+	/// Capture the calling thread once and resolve each frame once. Missing
+	/// symbols are normal; a recoverable resolver panic produces an empty trace.
+	#[inline(never)]
 	pub fn backtrace(base: &str) -> Vec<Hbacktrace>
 	{
-		let mut internal = true;
-		let mut returning = Vec::new();
-
-		// in case of no filename/path present, we use the current symbol name
-		let bt = backtrace::Backtrace::new();
-		let thisBTName = bt.frames()[0].symbols()[0].name().map(|x| x.to_string()).unwrap_or_default();
-		//println!("{:?}",bt.frames()[0].symbols()[0].name());
-
-		//println!("frame : -----");
-		backtrace::trace(|x|{
-			backtrace::resolve_frame(x, |symbol| {
-				//println!("frame symbol : {:?} => {:?} => {:?} => {:?}",symbol.name(),symbol.filename(), symbol.lineno(),base);
-
-				let name = symbol.name().map(|sbname| sbname.to_string());
-				let filename = symbol.filename().map(|x| x.to_str().unwrap_or_default().to_string());
-				let line = symbol.lineno();
-
-				// solvable
-				let Some(name) = name else {return;};
-				let mut normalizedName = name.clone();
-
-				if let Some((splitted,_)) = name.rsplit_once("::")
-				{
-					normalizedName = format!("{}()",splitted);
-				}
-
-
-				match &filename
-				{
-					None => {
-						if(name == thisBTName)
-						{
-							internal = false;
-							return; // start on the next symbol
-						}
+		BACKTRACES.fetch_add(1, Ordering::Relaxed);
+		match catch_unwind(AssertUnwindSafe(|| {
+			let mut frames = Vec::new();
+			backtrace::trace(|frame| {
+				backtrace::resolve_frame(frame, |symbol| {
+					let name = symbol.name().map(|name| name.to_string());
+					let filename = symbol
+						.filename()
+						.map(|path| path.to_string_lossy().into_owned());
+					if name.is_some() || filename.is_some()
+					{
+						frames.push(Hbacktrace {
+							funcName: name.unwrap_or_else(|| "<unknown>".to_owned()),
+							fileName: filename,
+							line: symbol.lineno(),
+						});
 					}
-					Some(filename) => {
-						if(filename.ends_with(base))
-						{
-							internal = false;
-						}
-
-						// ignore rustc backtrace part
-						if(filename.starts_with("/rustc/")) {
-							return;
-						}
-					}
-				}
-
-
-				// probably the /rustc/ part is not multiplatform safe
-				if !internal
-				{
-					returning.push(Hbacktrace {
-						funcName: normalizedName,
-						fileName: filename,
-						line,
-					});
-				}
+				});
+				true
 			});
-			true
-		});
-		
-		return returning;
-	}
-
-	pub fn drop()
-	{
-		sleep(Duration::from_millis(1));
-
-		Self::singleton()._threadWriting.write().loop_set(false);
-
-		// TODO : better handling of the error ?
-		let _ = Self::singleton()._threadWriting.write().wait();
-
-		let remainTraces = Self::singleton()._deferredTraces.read().len();
-		if(remainTraces > 0)
+			Self::backtrace_filter(frames, base)
+		}))
 		{
-			Self::singleton().internal_writeTraces();
+			Ok(frames) => frames,
+			Err(_) =>
+			{
+				BACKTRACE_ERRORS.fetch_add(1, Ordering::Relaxed);
+				Vec::new()
+			}
 		}
 	}
-	
-	//////////// PRIVATE ///////////
 
-	fn new() -> HTracer {
-		let thread = SingletonThread::new(||{
-			Self::singleton().internal_writeTraces();
-		});
-
-		return HTracer {
-			_deferredTraces: RwLock::new(vec![]),
-			_threadWriting: RwLock::new(thread),
-		};
-	}
-
-	fn internal_writeTraces(&self)
+	fn backtrace_filter(frames: Vec<Hbacktrace>, base: &str) -> Vec<Hbacktrace>
 	{
-		let mut getWritingStuff = {
-			let mut binding = Self::singleton()._deferredTraces.write();
-			mem::replace(&mut *binding,vec![])
-		};
+		let start = frames
+			.iter()
+			.position(|frame| {
+				!base.is_empty()
+					&& frame
+						.fileName
+						.as_ref()
+						.is_some_and(|file| file.ends_with(base))
+			})
+			.or_else(|| {
+				frames
+					.iter()
+					.rposition(|frame| frame.funcName.contains("::HTracer::backtrace"))
+					.map(|index| index + 1)
+			})
+			.unwrap_or(0);
+		frames
+			.into_iter()
+			.skip(start)
+			.filter(|frame| {
+				!frame
+					.fileName
+					.as_ref()
+					.is_some_and(|file| file.starts_with("/rustc/"))
+					&& !frame.funcName.contains("::HTracer::backtrace")
+			})
+			.collect()
+	}
+}
 
-		getWritingStuff.sort_by(|a,b| a.date.cmp(&b.date));
-		
-		for x in getWritingStuff {
-			x.emit();
+#[cfg(test)]
+mod backtrace_tests
+{
+	use super::*;
+
+	fn frame(name: &str, file: Option<&str>) -> Hbacktrace
+	{
+		Hbacktrace {
+			funcName: name.into(),
+			fileName: file.map(str::to_owned),
+			line: None,
 		}
+	}
+
+	#[test]
+	fn absent_symbols_and_partial_frames_have_a_safe_fallback()
+	{
+		assert!(HTracer::backtrace_filter(Vec::new(), "missing.rs").is_empty());
+		let frames = HTracer::backtrace_filter(vec![frame("<unknown>", None)], "missing.rs");
+		assert_eq!(frames.len(), 1);
+		assert_eq!(frames[0].funcName, "<unknown>");
+		let frames = HTracer::backtrace_filter(
+			vec![
+				frame("htrace::htracer::HTracer::backtrace", None),
+				frame("application::request", None),
+			],
+			"missing.rs",
+		);
+		assert_eq!(frames.len(), 1);
+		assert_eq!(frames[0].funcName, "application::request");
+	}
+
+	#[test]
+	fn source_origin_filters_internal_and_rustc_frames()
+	{
+		let frames = HTracer::backtrace_filter(
+			vec![
+				frame(
+					"htrace::htracer::HTracer::backtrace",
+					Some("src/htracer.rs"),
+				),
+				frame("application::request", Some("/remapped/src/app.rs")),
+				frame("core::call", Some("/rustc/abc/core.rs")),
+				frame("external", None),
+			],
+			"src/app.rs",
+		);
+		assert_eq!(frames.len(), 2);
+		assert_eq!(frames[0].funcName, "application::request");
+		assert_eq!(frames[1].funcName, "external");
 	}
 }

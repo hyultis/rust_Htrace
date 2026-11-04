@@ -6,3 +6,9 @@ Cargo.lock
 /traces
 /target
 ./*.iml
+/launch_codex.sh
+/ia_workflows/
+
+/benchmarks/runs/
+
+__pycache__/
