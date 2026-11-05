@@ -22,6 +22,8 @@ fn formater()
 	);
 
 	let mut context = Context::default();
+	// This synthetic trace bypasses the resolver, so supply its producer name.
+	context.threadName_set("MAIN");
 	context.extra_set("test", "cake");
 
 	let parameters = FormaterParamBuilder(

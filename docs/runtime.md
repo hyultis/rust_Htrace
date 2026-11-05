@@ -49,6 +49,13 @@ inherits its parent. Spans are isolated by the producing thread's identity, even
 when threads share a name. `Spaned!` creates a scoped span. These are thread scopes,
 not task-local async contexts; a moved guard still removes its original scope.
 
+`Context::threadName_set()` overrides the displayed producer name and file group
+within the span installed from that context. The innermost explicit name wins;
+an unnamed child inherits its parent. Leaving the span restores the outer name
+or the producer's native name (`MAIN` if unnamed). This does not rename the OS
+thread or change span isolation. Install the context in each worker scope whose
+traces should share the group; spans do not propagate to spawned tasks.
+
 Context clones and trace snapshots never fire exit callbacks. Exiting a span
 queues one logical notification after commands already inserted. Dropping an
 outer guard out of order removes only that scope; inner guards stay active.

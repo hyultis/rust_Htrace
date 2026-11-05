@@ -68,6 +68,16 @@ Example terminal output (levels and messages are colored):
 - `Spaned!("name")` names a scope. Pass a `Context` to customize its threshold,
   outputs or extra fields. Contexts inherit from their parent and are isolated per thread.
 
+To group a worker's logs under a shared thread name, install a context in its scope:
+
+```rust
+let mut context = htrace::components::context::Context::default();
+context.threadName_set("taskpool");
+htrace::Spaned!(context);
+```
+
+The name applies to `{thread}` and file grouping for this scope and its children.
+
 Disabled traces skip message evaluation, formatting and backtrace capture.
 `HTraceError!` always evaluates the Result expression once, even when filtered.
 A single string expression is literal: `HTrace!("x = {x}")` prints the braces;

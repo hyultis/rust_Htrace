@@ -1,7 +1,6 @@
 #![cfg(feature = "default_module")]
 #![allow(non_snake_case)]
 
-use htrace::HTrace;
 use htrace::components::context::Context;
 use htrace::components::level::Level;
 use htrace::components::trace::OneTrace;
@@ -11,6 +10,7 @@ use htrace::htracer::HTracer;
 use htrace::modules::file::File;
 use htrace::modules::file_config::FileConfig;
 use htrace::modules::module_abstract::ModuleAbstract;
+use htrace::{HTrace, Spaned};
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -257,8 +257,31 @@ fn file_output()
 		.join()
 		.unwrap();
 	}
+	// Taskpool workers can group their files through an explicit span name.
+	let barrier = Arc::new(Barrier::new(2));
+	let mut groupedWorkers = Vec::new();
+	for index in 1..=2
+	{
+		let barrier = barrier.clone();
+		groupedWorkers.push(
+			std::thread::Builder::new()
+				.name(format!("Async Compute Task Pool ({index})"))
+				.spawn(move || {
+					let mut context = Context::default();
+					context.threadName_set("taskpool-group");
+					Spaned!(context);
+					barrier.wait();
+					HTrace!("grouped payload {}", index);
+				})
+				.unwrap(),
+		);
+	}
+	for worker in groupedWorkers
+	{
+		worker.join().unwrap();
+	}
 	HTracer::flush_timeout(Duration::from_secs(5)).unwrap();
-	assert_eq!(producerFiles.stats().linesWritten, 10);
+	assert_eq!(producerFiles.stats().linesWritten, 12);
 	for prefix in [
 		"producer-one_",
 		"producer-two_",
@@ -303,7 +326,22 @@ fn file_output()
 		std::fs::read_to_string(mainFile).unwrap(),
 		"unnamed payload\nunnamed payload\n"
 	);
-	assert_eq!(std::fs::read_dir(&producerPath).unwrap().count(), 8);
+	let groupedFiles = std::fs::read_dir(&producerPath)
+		.unwrap()
+		.map(|entry| entry.unwrap().path())
+		.filter(|path| {
+			path.file_name()
+				.unwrap()
+				.to_string_lossy()
+				.starts_with("taskpool-group_")
+		})
+		.collect::<Vec<_>>();
+	assert_eq!(groupedFiles.len(), 1);
+	let groupedContents = std::fs::read_to_string(&groupedFiles[0]).unwrap();
+	let mut groupedLines = groupedContents.lines().collect::<Vec<_>>();
+	groupedLines.sort();
+	assert_eq!(groupedLines, vec!["grouped payload 1", "grouped payload 2"]);
+	assert_eq!(std::fs::read_dir(&producerPath).unwrap().count(), 9);
 	HTracer::shutdown_timeout(Duration::from_secs(5)).unwrap();
 	assert_eq!(producerFiles.stats().flushErrors, 0);
 

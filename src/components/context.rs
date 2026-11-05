@@ -1,6 +1,5 @@
 use crate::components::level::Level;
 use crate::modules::module_abstract::ModuleAbstract;
-use crate::thread_manager::ThreadManager;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -76,13 +75,13 @@ impl Context
 		self._minlvl.as_ref()
 	}
 
-	/// set thread name
+	/// Override the producer's display name for this span and its children.
 	pub fn threadName_set(&mut self, threadName: impl Into<String>)
 	{
 		self._threadName = Some(threadName.into());
 	}
 
-	/// get thread name (initialised when creating context, using ThreadManager::local_getName() )
+	/// Get the explicit thread name, or None to inherit the parent or producer name.
 	pub fn threadName_get(&self) -> &Option<String>
 	{
 		return &self._threadName;
@@ -133,7 +132,7 @@ impl Default for Context
 	fn default() -> Self
 	{
 		return Self {
-			_threadName: ThreadManager::local_getName(),
+			_threadName: None,
 			_name: None,
 			_modules: Default::default(),
 			_minlvl: None,

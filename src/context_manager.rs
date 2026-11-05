@@ -163,6 +163,10 @@ impl ContextManager
 		for entry in entries
 		{
 			let oneContext = &entry.context;
+			if let Some(threadName) = oneContext.threadName_get()
+			{
+				resolvedContext.threadName_set(threadName);
+			}
 			for (key, module) in oneContext.modules_get()
 			{
 				match module

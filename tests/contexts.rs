@@ -1,5 +1,6 @@
 #![allow(non_snake_case)]
 
+use htrace::Spaned;
 use htrace::components::{context::Context, level::Level, span::Span, trace::OneTrace};
 #[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 use htrace::crates::bridge::HtraceBridge;
@@ -221,6 +222,104 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 		exit_names(&primary),
 		vec!["parent", "child", "next", "unwind", "moved"]
 	);
+
+	// Unnamed contexts inherit custom names even on the initialized MAIN thread.
+	assert!(Context::default().threadName_get().is_none());
+	{
+		let mut context: Context = "main-group".into();
+		context.threadName_set("main-custom");
+		context.level_setMin(Some(Level::NORMAL));
+		Spaned!(context);
+		{
+			Spaned!("main-unnamed-child");
+			trace("main-inherited-name");
+		}
+		trace("main-restored-parent");
+	}
+	{
+		let mut context: Context = "main-native".into();
+		context.level_setMin(Some(Level::NORMAL));
+		Spaned!(context);
+		trace("main-restored-native");
+	}
+
+	std::thread::Builder::new()
+		.name("Async Compute Task Pool (0)".to_owned())
+		.spawn(|| {
+			let mut context: Context = "taskpool-native".into();
+			context.level_setMin(Some(Level::NORMAL));
+			Spaned!(context);
+			trace("taskpool-before-group");
+			{
+				let mut context: Context = "taskpool-group".into();
+				context.threadName_set("taskpool-custom");
+				Spaned!(context);
+				trace("taskpool-parent-name");
+				{
+					Spaned!("taskpool-unnamed-child");
+					trace("taskpool-inherited-name");
+					{
+						let mut context: Context = "taskpool-renamed-child".into();
+						context.threadName_set("taskpool-inner");
+						Spaned!(context);
+						trace("taskpool-renamed-name");
+						{
+							Spaned!("taskpool-inner-unnamed-child");
+							trace("taskpool-inherited-inner-name");
+						}
+					}
+					trace("taskpool-restored-parent");
+				}
+			}
+			trace("taskpool-restored-native");
+		})
+		.unwrap()
+		.join()
+		.unwrap();
+	HTracer::flush().unwrap();
+	let records = primary.snapshot();
+	for (message, threadName) in [
+		("main-inherited-name", "main-custom"),
+		("main-restored-parent", "main-custom"),
+		("main-restored-native", "MAIN"),
+		("taskpool-before-group", "Async Compute Task Pool (0)"),
+		("taskpool-parent-name", "taskpool-custom"),
+		("taskpool-inherited-name", "taskpool-custom"),
+		("taskpool-renamed-name", "taskpool-inner"),
+		("taskpool-inherited-inner-name", "taskpool-inner"),
+		("taskpool-restored-parent", "taskpool-custom"),
+		("taskpool-restored-native", "Async Compute Task Pool (0)"),
+	]
+	{
+		let record = records
+			.iter()
+			.find(|record| record.message == message)
+			.unwrap();
+		assert_eq!(record.context.threadName_get().as_deref(), Some(threadName));
+	}
+	for (name, threadName) in [
+		("main-unnamed-child", "main-custom"),
+		("main-group", "main-custom"),
+		("main-native", "MAIN"),
+		("taskpool-inner-unnamed-child", "taskpool-inner"),
+		("taskpool-renamed-child", "taskpool-inner"),
+		("taskpool-unnamed-child", "taskpool-custom"),
+		("taskpool-group", "taskpool-custom"),
+		("taskpool-native", "Async Compute Task Pool (0)"),
+	]
+	{
+		let exits = records
+			.iter()
+			.filter(|record| {
+				record.kind == "exit" && record.context.name_get().as_deref() == Some(name)
+			})
+			.collect::<Vec<_>>();
+		assert_eq!(exits.len(), 1);
+		assert_eq!(
+			exits[0].context.threadName_get().as_deref(),
+			Some(threadName)
+		);
+	}
 
 	// Both anonymous and identically named producers keep independent stacks.
 	for threadName in [None, Some("same-producer")]

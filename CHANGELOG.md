@@ -19,6 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - File and console error counters, concurrency/lifecycle/macro/file regression tests, feature matrix and reproducible benchmarks.
 
 ### Fixed
+- Span contexts honor `threadName_set()` for displayed names and file grouping, inherit names through unnamed children, and restore the previous name on exit.
 - Unnamed producers use `MAIN` instead of numeric thread IDs; generated filenames preserve readable spaces and parentheses in thread names.
 - `log_consumer` standalone compilation and optional test feature gates; duplicate test execution removed.
 - Context callbacks and destructors run outside manager locks; malformed Hconfig scalar values fall back to defaults.
