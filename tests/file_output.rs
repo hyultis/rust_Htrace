@@ -42,6 +42,50 @@ fn trace(message: &str, date: OffsetDateTime) -> OneTrace
 }
 
 #[test]
+fn append_across_processes()
+{
+	const DIRECTORY: &str = "HTRACE_TEST_APPEND_DIRECTORY";
+	const MESSAGE: &str = "HTRACE_TEST_APPEND_MESSAGE";
+	if let Some(directory) = std::env::var_os(DIRECTORY)
+	{
+		let output = File::new(config(Path::new(&directory)));
+		let message = std::env::var(MESSAGE).unwrap();
+		output.event_onNormal(&trace(&message, datetime!(2026-01-01 00:00 UTC)));
+		output.flush().unwrap();
+		assert_eq!(output.stats().linesWritten, 1);
+		assert_eq!(output.stats().writeErrors, 0);
+		return;
+	}
+
+	let root = std::env::temp_dir().join(format!(
+		"htrace-append-tests-{}-{}",
+		std::process::id(),
+		SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	std::fs::create_dir(&root).unwrap();
+	let path = root.join("all_20260101.trc");
+	std::fs::write(&path, "existing content\n").unwrap();
+	let mut expected = "existing content\n".to_string();
+	for message in ["first execution", "second execution"]
+	{
+		let result = std::process::Command::new(std::env::current_exe().unwrap())
+			.args(["--exact", "append_across_processes", "--nocapture"])
+			.env(DIRECTORY, &root)
+			.env(MESSAGE, message)
+			.output()
+			.unwrap();
+		assert!(result.status.success(), "child process failed: {result:?}");
+		expected.push_str(message);
+		expected.push('\n');
+		assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+	}
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn file_output()
 {
 	let root = std::env::temp_dir().join(format!(

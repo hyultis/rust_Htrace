@@ -77,7 +77,7 @@ impl Context
 	}
 
 	/// set thread name
-	pub(crate) fn threadName_set(&mut self, threadName: impl Into<String>)
+	pub fn threadName_set(&mut self, threadName: impl Into<String>)
 	{
 		self._threadName = Some(threadName.into());
 	}
