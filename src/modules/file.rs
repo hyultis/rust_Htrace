@@ -13,6 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use time::macros::format_description;
 
+mod retention;
+use retention::Retention;
+
 const FILE_CACHE_LIMIT: usize = 16;
 
 /// Per-destination output counters. A successful line was accepted by write_all;
@@ -27,6 +30,18 @@ pub struct FileStats
 	pub writeErrors: u64,
 	pub flushErrors: u64,
 	pub cachedHandles: usize,
+	/// Started passes, including attempts against missing or unusable roots.
+	pub purgeRuns: u64,
+	/// Successful removals only; excluded entries are not failures.
+	pub purgedFiles: u64,
+	/// Directory, metadata, cache-close and removal failures.
+	pub purgeErrors: u64,
+}
+
+struct FileState
+{
+	files: VecDeque<(PathBuf, OutputFile)>,
+	retention: Retention,
 }
 
 pub struct File
@@ -34,13 +49,18 @@ pub struct File
 	_name: String,
 	_configs: FileConfig,
 	_formaterCompiled: FormaterCompiled,
-	_files: Mutex<VecDeque<(PathBuf, OutputFile)>>,
+	_path: PathBuf,
+	_purgeRootResolved: bool,
+	_files: Mutex<FileState>,
 	_cachedHandles: AtomicUsize,
 	_linesWritten: AtomicU64,
 	_createErrors: AtomicU64,
 	_openErrors: AtomicU64,
 	_writeErrors: AtomicU64,
 	_flushErrors: AtomicU64,
+	_purgeRuns: AtomicU64,
+	_purgedFiles: AtomicU64,
+	_purgeErrors: AtomicU64,
 }
 
 impl File
@@ -48,17 +68,32 @@ impl File
 	pub fn new(config: FileConfig) -> File
 	{
 		let fmtComp = (config.formaterCompiler)(&config.lineFormat);
+		// Freeze relative destinations too, so changing cwd cannot redirect retention.
+		// If cwd cannot be resolved, purge refuses this non-absolute root later.
+		let resolved = std::path::absolute(&config.path);
+		let purgeRootResolved = resolved.is_ok();
+		// Preserve the original absolute spelling. Removing a final separator can
+		// change Windows resolution for directory names ending in a space or dot.
+		let path = resolved.unwrap_or_else(|_| PathBuf::from(&config.path));
 		File {
 			_name: String::new(),
 			_configs: config,
 			_formaterCompiled: fmtComp,
-			_files: Mutex::new(VecDeque::new()),
+			_path: path,
+			_purgeRootResolved: purgeRootResolved,
+			_files: Mutex::new(FileState {
+				files: VecDeque::new(),
+				retention: Retention::default(),
+			}),
 			_cachedHandles: AtomicUsize::new(0),
 			_linesWritten: AtomicU64::new(0),
 			_createErrors: AtomicU64::new(0),
 			_openErrors: AtomicU64::new(0),
 			_writeErrors: AtomicU64::new(0),
 			_flushErrors: AtomicU64::new(0),
+			_purgeRuns: AtomicU64::new(0),
+			_purgedFiles: AtomicU64::new(0),
+			_purgeErrors: AtomicU64::new(0),
 		}
 	}
 
@@ -72,6 +107,9 @@ impl File
 			writeErrors: self._writeErrors.load(Ordering::Relaxed),
 			flushErrors: self._flushErrors.load(Ordering::Relaxed),
 			cachedHandles: self._cachedHandles.load(Ordering::Relaxed),
+			purgeRuns: self._purgeRuns.load(Ordering::Relaxed),
+			purgedFiles: self._purgedFiles.load(Ordering::Relaxed),
+			purgeErrors: self._purgeErrors.load(Ordering::Relaxed),
 		}
 	}
 
@@ -97,21 +135,16 @@ impl File
 			.date
 			.format(dateFormat)
 			.unwrap_or_else(|_| "00000000".to_string());
+		let mut paths = Vec::with_capacity(3);
 		if let Some(filename) = &self._configs.forceInOneFile
 		{
-			self.writeToFile(
-				Path::new(&format!("{}/{}_{}.trc", self._configs.path, filename, date)),
-				line.as_bytes(),
-			);
+			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
 		}
 		if self._configs.bySrc
 		{
 			let basename = trace.filename.rsplit(['/', '\\']).next().unwrap_or("");
 			let filename = Self::filenameComponent(basename.split('.').next().unwrap_or(""));
-			self.writeToFile(
-				Path::new(&format!("{}/{}_{}.trc", self._configs.path, filename, date)),
-				line.as_bytes(),
-			);
+			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
 		}
 		if self._configs.byThreadId
 		{
@@ -122,11 +155,18 @@ impl File
 				.as_deref()
 				.unwrap_or(MAIN_THREAD);
 			let filename = Self::filenameComponent(producer);
-			self.writeToFile(
-				Path::new(&format!("{}/{}_{}.trc", self._configs.path, filename, date)),
-				line.as_bytes(),
-			);
+			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
 		}
+		self.writeToFiles(&paths, line.as_bytes());
+	}
+
+	// Preserve forceInOneFile path semantics, including separators and .. .
+	fn destinationPath(&self, name: &str) -> PathBuf
+	{
+		let mut path = self._path.as_os_str().to_owned();
+		path.push("/");
+		path.push(name);
+		PathBuf::from(path)
 	}
 
 	// Keep readable names without allowing separators or dot segments.
@@ -148,10 +188,34 @@ impl File
 		component
 	}
 
-	fn writeToFile(&self, filepath: &Path, line: &[u8])
+	fn writeToFiles(&self, paths: &[PathBuf], line: &[u8])
 	{
-		// Serialize direct concurrent calls too, keeping each complete line together.
-		let mut files = self._files.lock();
+		// The same lock covers appends, closing cached handles and deletion.
+		let mut state = self._files.lock();
+		state.retention.startupAttempted = true;
+		let mut written = false;
+		for path in paths
+		{
+			written |= self.writeToFile(&mut state.files, path, line);
+		}
+		if written
+		{
+			let _ = self.purgePeriodic(
+				&mut state,
+				paths,
+				std::time::SystemTime::now(),
+				std::time::Instant::now(),
+			);
+		}
+	}
+
+	fn writeToFile(
+		&self,
+		files: &mut VecDeque<(PathBuf, OutputFile)>,
+		filepath: &Path,
+		line: &[u8],
+	) -> bool
+	{
 		let mut entry = match files.iter().position(|(path, _)| path == filepath)
 		{
 			Some(position) => files.remove(position),
@@ -170,12 +234,12 @@ impl File
 				else
 				{
 					self._createErrors.fetch_add(1, Ordering::Relaxed);
-					return;
+					return false;
 				};
 				if create_dir_all(parent).is_err()
 				{
 					self._createErrors.fetch_add(1, Ordering::Relaxed);
-					return;
+					return false;
 				}
 				match OpenOptions::new().create(true).append(true).open(filepath)
 				{
@@ -183,7 +247,7 @@ impl File
 					Err(_) =>
 					{
 						self._openErrors.fetch_add(1, Ordering::Relaxed);
-						return;
+						return false;
 					}
 				}
 			}
@@ -198,13 +262,14 @@ impl File
 			{
 				// Retry opening on the next trace after a write failure.
 				self._cachedHandles.store(files.len(), Ordering::Relaxed);
-				return;
+				return false;
 			}
 		}
 		if let Some(entry) = entry
 		{
 			files.push_back(entry);
 		}
+		true
 	}
 
 	fn writeLine(&self, writer: &mut impl Write, line: &[u8]) -> io::Result<()>
@@ -234,6 +299,12 @@ impl File
 
 impl ModuleAbstract for File
 {
+	/// Direct callers may run this once before writing; later calls are harmless.
+	fn event_onStartup(&self) -> Result<()>
+	{
+		self.purgeStartup().map_err(Into::into)
+	}
+
 	fn name_set(&mut self, moduleName: String) -> Result<()>
 	{
 		self._name = moduleName;
@@ -298,9 +369,9 @@ impl ModuleAbstract for File
 
 	fn flush(&self) -> Result<()>
 	{
-		let mut files = self._files.lock();
+		let mut state = self._files.lock();
 		let mut firstError = None;
-		for (_, file) in files.iter_mut()
+		for (_, file) in state.files.iter_mut()
 		{
 			if let Err(error) = self.flushWriter(file)
 			{
@@ -309,6 +380,12 @@ impl ModuleAbstract for File
 					firstError = Some(error);
 				}
 			}
+		}
+		// A flush advances an existing scan, but never starts an idle cadence.
+		if let Err(error) = self.purgeAdvance(&mut state, &[], std::time::SystemTime::now())
+			&& firstError.is_none()
+		{
+			firstError = Some(error);
 		}
 		match firstError
 		{

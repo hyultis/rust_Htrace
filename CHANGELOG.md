@@ -14,11 +14,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - File output uses producer names, complete writes and a bounded cache of 16 open handles.
 
 ### Added
+- Optional file cleanup through `purgeAfterDays` and `purgeOnStartup`, also available in Hconfig; direct regular `.trc` files only, with cleanup counters and no new dependencies.
+- A default `ModuleAbstract::event_onStartup()` hook for initial modules, executed on the writer before traces.
 - `enabled`, `flush`, `flush_timeout`, `shutdown`, `shutdown_timeout`, `stats`, `trace_display`, `trace_debug`.
 - A default module `flush()` hook.
 - File and console error counters, concurrency/lifecycle/macro/file regression tests, feature matrix and reproducible benchmarks.
 
 ### Fixed
+- Cleanup uses one canonical namespace for enumeration and deletion, rejects ambiguous root spellings and malformed candidate components, and refuses pathname roots (such as `/` or a drive/share root).
 - Span contexts honor `threadName_set()` for displayed names and file grouping, inherit names through unnamed children, and restore the previous name on exit.
 - Unnamed producers use `MAIN` instead of numeric thread IDs; generated filenames preserve readable spaces and parentheses in thread names.
 - `log_consumer` standalone compilation and optional test feature gates; duplicate test execution removed.
@@ -26,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Console write errors no longer panic through `println!`.
 
 ### Breaking changes
+- `FileConfig` has two new fields; struct literals can use `..FileConfig::default()` to keep cleanup disabled. Relative file paths are resolved at module construction.
 - The Rust library target is now `htrace`: change imports from `Htrace::` to `htrace::`. The crates.io package remains `Htrace`.
 - Rust 1.97 is the minimum supported compiler version.
 - `HTraceError!` now borrows its Result in every form instead of consuming its error.

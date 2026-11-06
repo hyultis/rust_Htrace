@@ -90,6 +90,65 @@ The console similarly records write/flush errors in `CommandLine::writeErrors()`
 and reports prior output failures through its flush hook. Invalid Hconfig scalar
 types fall back to module defaults instead of panicking.
 
+## File cleanup
+
+`FileConfig::purgeAfterDays` defaults to `None`. `Some(n)` for `n >= 1` removes
+eligible files whose last modification is strictly more than `n * 24` hours
+old. `Some(0)` is disabled. A future modification time is preserved; the date
+in the filename does not determine age. Appending to an old file makes it
+recent again. Hconfig accepts a positive integer, `null` or `0`; malformed
+values retain the supplied default.
+
+`purgeOnStartup` defaults to `false`. When enabled, it removes all eligible
+existing files regardless of age. It runs on the worker for modules installed
+in the initial global configuration, before any queued trace, even if no trace
+is emitted. Reconfiguration and modules installed later do not run startup
+cleanup. `flush()` can wait for startup completion using the normal timeout.
+For direct module use, call `ModuleAbstract::event_onStartup()` before writing;
+this hook is idempotent for `File`, and a first direct write suppresses a later
+startup cleanup. Merely constructing a `File` does not delete anything.
+
+Both modes select only regular files with the exact `.trc` extension directly
+inside `FileConfig::path`. Names need no date suffix or provenance marker:
+the directory is reserved for HTrace. Other extensions, nested directories,
+symbolic links and Windows reparse points are skipped. A trace root that is
+itself a link/reparse point is refused for cleanup. Explicit output paths
+outside this directory are never cleanup targets.
+
+Enumeration and deletion use the same saved canonical directory. Ambiguous root
+spellings and pathname roots (such as `/` or a drive/share root) are refused; candidate names must be exact single
+components whose canonical path matches the expected direct child. A hard link
+is a regular file: cleanup removes its name inside the trace directory, leaving
+other names for that file intact.
+
+The path is fixed relative to the working directory at module construction.
+Cleanup uses Rust's standard library and assumes one owning file module and a
+directory whose parents remain stable during execution. Path/type checks do
+not provide protection against another process replacing directories between
+checks and deletion. Concurrent writers from other modules/processes are not
+coordinated. Cached expired handles are closed under the same lock as writing
+and deletion; subsequent writes reopen the destination in append mode.
+
+The remaining path-replacement race is reproducible: replacing the directory
+with a symlink after the final check can redirect deletion. Immutable configuration
+alone does not prevent this. This implementation must not be treated as a security
+boundary against processes able to change the directory or its ancestors.
+
+Age-based cleanup begins after an effective write and starts at most one scan
+per hour of activity. Each write or module flush advances an active scan by
+at most 64 entries and 8 successful deletions. A flush does not start a new
+scan. Idle scans resume with activity; there is no timer or deadline for
+removal. Startup cleanup finishes its full pass before traces are processed,
+so a large directory can delay initial output and grow the queue temporarily.
+These work budgets cannot bound a blocked filesystem operation.
+
+Disabled cleanup and modules with no active destinations perform no scans.
+`File::stats()` exposes `purgeRuns` (scan attempts), `purgedFiles` (successful
+deletions) and `purgeErrors`. Failures preserve undeleted files, do not panic or
+log recursively, and are not retried as another startup cleanup. Startup and
+flush failures also use the existing module-error reporting. Files created by
+later traces are retained according to the normal age policy.
+
 ## Backtraces and validation
 
 Backtraces capture the producer stack once and resolve each frame once, with

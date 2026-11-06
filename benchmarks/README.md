@@ -1,5 +1,7 @@
 # Htrace benchmark protocol
 
+For optional file cleanup, see the separate [retention measurement](file_retention.md).
+
 The current harness, `examples/benchmark.rs`, uses `HTrace!`,
 `HTracer::globalContext_set` and `HTracer::shutdown`, with no additional dependencies.
 Each run is a separate process with an in-memory counting module and no per-trace

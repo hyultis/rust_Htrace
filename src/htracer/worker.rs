@@ -327,6 +327,14 @@ impl Worker
 			registry: HashMap::new(),
 		};
 		worker.register(modules);
+		for module in worker.registry.values().filter_map(Weak::upgrade)
+		{
+			worker.callback(|| module.event_onStartup());
+			worker.callback(|| {
+				drop(module);
+				Ok(())
+			});
+		}
 		worker
 	}
 
@@ -463,6 +471,7 @@ mod tests
 	#[derive(Default)]
 	struct TestModule
 	{
+		onStartup: Option<FlushCallback>,
 		onTrace: Option<TraceCallback>,
 		onFlush: Option<FlushCallback>,
 		onExit: Option<Box<dyn Fn() + Send + Sync>>,
@@ -491,6 +500,14 @@ mod tests
 		fn name_get(&self) -> anyhow::Result<String>
 		{
 			Ok("test".into())
+		}
+		fn event_onStartup(&self) -> anyhow::Result<()>
+		{
+			match &self.onStartup
+			{
+				Some(callback) => callback(),
+				None => Ok(()),
+			}
 		}
 		fn event_onDebug(&self, trace: &OneTrace)
 		{
@@ -580,6 +597,151 @@ mod tests
 			)
 			.unwrap();
 		(runtime, context)
+	}
+
+	#[test]
+	fn startup_runs_on_worker_before_first_trace()
+	{
+		let events = Arc::new(Mutex::new(Vec::new()));
+		let startupEvents = events.clone();
+		let traceEvents = events.clone();
+		let (runtime, context) = configured(TestModule {
+			onStartup: Some(Box::new(move || {
+				assert!(is_worker());
+				assert_eq!(thread::current().name(), Some("Htrace-writer"));
+				startupEvents.lock().push("startup");
+				Ok(())
+			})),
+			onTrace: Some(Box::new(move |_| traceEvents.lock().push("trace"))),
+			..Default::default()
+		});
+		assert!(runtime.send_trace(trace(&context, "first")));
+		runtime.shutdown(WAIT).unwrap();
+		assert_eq!(*events.lock(), ["startup", "trace"]);
+	}
+
+	#[test]
+	fn startup_runs_without_traces_before_flush_or_shutdown()
+	{
+		for flushFirst in [false, true]
+		{
+			let starts = Arc::new(AtomicUsize::new(0));
+			let output = starts.clone();
+			let (runtime, _context) = configured(TestModule {
+				onStartup: Some(Box::new(move || {
+					output.fetch_add(1, Ordering::Relaxed);
+					Ok(())
+				})),
+				..Default::default()
+			});
+			if flushFirst
+			{
+				runtime.flush(WAIT).unwrap();
+				assert_eq!(starts.load(Ordering::Relaxed), 1);
+			}
+			runtime.shutdown(WAIT).unwrap();
+			assert_eq!(starts.load(Ordering::Relaxed), 1);
+			assert_eq!(runtime.stats().processed, 0);
+		}
+	}
+
+	#[test]
+	fn startup_deduplicates_initial_arcs_and_ignores_later_modules()
+	{
+		let initialStarts = Arc::new(AtomicUsize::new(0));
+		let output = initialStarts.clone();
+		let initial: Module = Arc::new(TestModule {
+			onStartup: Some(Box::new(move || {
+				output.fetch_add(1, Ordering::Relaxed);
+				Ok(())
+			})),
+			..Default::default()
+		});
+		let lateStarts = Arc::new(AtomicUsize::new(0));
+		let output = lateStarts.clone();
+		let late: Module = Arc::new(TestModule {
+			onStartup: Some(Box::new(move || {
+				output.fetch_add(1, Ordering::Relaxed);
+				Ok(())
+			})),
+			..Default::default()
+		});
+		let runtime = Runtime::default();
+		runtime
+			.start(vec![Arc::downgrade(&initial), Arc::downgrade(&initial)])
+			.unwrap();
+		runtime.flush(WAIT).unwrap();
+		assert_eq!(initialStarts.load(Ordering::Relaxed), 1);
+		// Repeated global configuration and explicit Register commands share this path.
+		runtime
+			.start(vec![Arc::downgrade(&initial), Arc::downgrade(&late)])
+			.unwrap();
+		let mut context = Context::default();
+		context.module_add_arc("initial", initial);
+		context.module_add_arc("late", late);
+		assert!(runtime.send_trace(trace(&context, "later")));
+		runtime.context_exit(context);
+		runtime.flush(WAIT).unwrap();
+		runtime.shutdown(WAIT).unwrap();
+		assert_eq!(initialStarts.load(Ordering::Relaxed), 1);
+		assert_eq!(lateStarts.load(Ordering::Relaxed), 0);
+	}
+
+	#[test]
+	fn startup_errors_and_panics_are_isolated_and_visible_to_finite_controls()
+	{
+		let processed = Arc::new(AtomicUsize::new(0));
+		let output = processed.clone();
+		let healthyStarts = Arc::new(AtomicUsize::new(0));
+		let startupOutput = healthyStarts.clone();
+		let mut context = Context::default();
+		context.module_add(
+			"error",
+			TestModule {
+				onStartup: Some(Box::new(|| anyhow::bail!("injected startup error"))),
+				..Default::default()
+			},
+		);
+		context.module_add(
+			"panic",
+			TestModule {
+				onStartup: Some(Box::new(|| panic!("injected startup panic"))),
+				..Default::default()
+			},
+		);
+		context.module_add(
+			"healthy",
+			TestModule {
+				onStartup: Some(Box::new(move || {
+					startupOutput.fetch_add(1, Ordering::Relaxed);
+					Ok(())
+				})),
+				onTrace: Some(Box::new(move |_| {
+					output.fetch_add(1, Ordering::Relaxed);
+				})),
+				..Default::default()
+			},
+		);
+		let runtime = Runtime::default();
+		runtime
+			.start(
+				context
+					.modules_get()
+					.values()
+					.flatten()
+					.map(Arc::downgrade)
+					.collect(),
+			)
+			.unwrap();
+		assert_eq!(runtime.flush(WAIT), Err(ControlError::ModuleFailed));
+		assert_eq!(runtime.stats().moduleErrors, 2);
+		assert_eq!(healthyStarts.load(Ordering::Relaxed), 1);
+		assert!(runtime.send_trace(trace(&context, "after startup failures")));
+		assert_eq!(runtime.shutdown(WAIT), Err(ControlError::ModuleFailed));
+		assert_eq!(processed.load(Ordering::Relaxed), 1);
+		assert_eq!(runtime.stats().processed, 1);
+		assert_eq!(runtime.stats().moduleErrors, 2);
+		assert_eq!(runtime.stats().workerErrors, 0);
 	}
 
 	#[test]

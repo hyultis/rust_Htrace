@@ -7,6 +7,14 @@ pub trait ModuleAbstract: Sync + Send
 	fn name_set(&mut self, moduleName: String) -> Result<()>;
 	fn name_get(&self) -> Result<String>;
 
+	/// Prepare the module before processing traces.
+	/// The runtime calls this only for modules supplied at its initial startup.
+	/// Direct module callers can invoke this hook explicitly.
+	fn event_onStartup(&self) -> Result<()>
+	{
+		Ok(())
+	}
+
 	fn event_onDebug(&self, trace: &OneTrace);
 	fn event_onDebugErr(&self, trace: &OneTrace);
 	fn event_onNormal(&self, trace: &OneTrace);

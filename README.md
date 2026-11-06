@@ -127,7 +127,26 @@ level through `CommandLineConfig::colors`; an empty map disables coloring.
 name or source file, or to a shared file. Unnamed threads share `MAIN`; spaces
 and parentheses are preserved in filenames, and unsafe characters become `_`.
 Both outputs have customizable formats.
+The configured trace directory is reserved for HTrace logs; do not store unrelated
+`.trc` files there.
 Implement `ModuleAbstract` to add an output.
+
+Optional cleanup is configured on `FileConfig` before creating the module:
+
+```rust
+let config = htrace::modules::file_config::FileConfig {
+    purgeAfterDays: Some(7), // Delete files last modified more than 7 days ago.
+    purgeOnStartup: false,  // Set true to delete all existing .trc files at startup.
+    ..Default::default()
+};
+```
+
+Both options default to disabled; `Some(0)` also disables age-based cleanup.
+Hconfig uses the same keys: `"purgeAfterDays": 7` (or `null`/`0`) and
+`"purgeOnStartup": false`. Only regular `.trc` files directly inside the trace
+directory are eligible; links, subdirectories and other extensions are skipped.
+Use one owning file module per directory and keep the directory and its parents
+stable during execution. See [cleanup behavior and limits](docs/runtime.md#file-cleanup).
 
 | Feature | Purpose |
 | --- | --- |
