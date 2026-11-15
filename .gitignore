@@ -7,6 +7,8 @@ Htrace.iml
 ./*.iml
 /launch_codex.sh
 /ia_workflows/
+/.claude/
+/Claude outputs/
 
 /benchmarks/runs/
 
