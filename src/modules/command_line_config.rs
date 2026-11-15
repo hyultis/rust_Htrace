@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[cfg(feature = "hconfig")]
 use crate::Errors;
 #[cfg(feature = "hconfig")]
-use Hconfig::tinyjson::JsonValue;
+use hconfig::tinyjson::JsonValue;
 
 pub struct CommandLineConfig
 {

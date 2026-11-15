@@ -5,9 +5,9 @@
 #[path = "support/capture.rs"]
 mod capture;
 
-use Hconfig::HConfigManager::HConfigManager;
-use Hconfig::IO::json::WrapperJson;
-use Hconfig::tinyjson::JsonValue;
+use hconfig::HConfigManager::HConfigManager;
+use hconfig::IO::json::WrapperJson;
+use hconfig::tinyjson::JsonValue;
 use capture::Capture;
 use htrace::components::context::Context;
 use htrace::components::level::Level;
@@ -50,8 +50,11 @@ fn trace_with_hconfig()
 		missingConfig.err()
 	);
 	{
-		let mut config = HConfigManager::singleton().get("htrace").unwrap();
-		config.value_set("scalar", JsonValue::String("not an object".into()));
+		let config = HConfigManager::singleton().get("htrace").unwrap();
+		config
+			.write()
+			.unwrap()
+			.value_set("scalar", JsonValue::String("not an object".into()));
 	}
 	let unreachable =
 		CommandLineConfig::from_hconfig("htrace", "scalar/cmd", CommandLineConfig::default());
@@ -61,16 +64,44 @@ fn trace_with_hconfig()
 		unreachable.err()
 	);
 	{
-		let mut config = HConfigManager::singleton().get("htrace").unwrap();
-		config.value_set("array", JsonValue::Array(vec![]));
+		let config = HConfigManager::singleton().get("htrace").unwrap();
+		config
+			.write()
+			.unwrap()
+			.value_set("array", JsonValue::Array(vec![]));
 	}
-	// Hconfig panics on an out-of-range array index; Htrace reports it as unreachable.
+	// An out-of-range array index is unreachable: the array is not grown.
 	let outOfRange =
 		CommandLineConfig::from_hconfig("htrace", "array/5/cmd", CommandLineConfig::default());
 	assert!(
 		matches!(&outOfRange, Err(Errors::CannotFoundConfigNode(name)) if name == "array/5/cmd"),
 		"{:?}",
 		outOfRange.err()
+	);
+	// Unreachable paths leave the configuration untouched.
+	{
+		let config = HConfigManager::singleton().get("htrace").unwrap();
+		let config = config.read().unwrap();
+		assert!(matches!(config.value_get("scalar"), Some(JsonValue::String(value)) if value == "not an object"));
+		assert!(matches!(config.value_get("array"), Some(JsonValue::Array(items)) if items.is_empty()));
+	}
+	// A missing nested path below objects is created and filled with the defaults.
+	CommandLineConfig::from_hconfig("htrace", "nested/deeper/cmd", CommandLineConfig::default())
+		.unwrap();
+	assert!(matches!(
+		HConfigManager::singleton()
+			.get("htrace")
+			.unwrap()
+			.read()
+			.unwrap()
+			.value_get("nested/deeper/cmd/lineFormat"),
+		Some(JsonValue::String(_))
+	));
+	let emptyKey = CommandLineConfig::from_hconfig("htrace", "", CommandLineConfig::default());
+	assert!(
+		matches!(&emptyKey, Err(Errors::CannotFoundConfigNode(_))),
+		"{:?}",
+		emptyKey.err()
 	);
 	let notObject =
 		CommandLineConfig::from_hconfig("htrace", "scalar", CommandLineConfig::default());

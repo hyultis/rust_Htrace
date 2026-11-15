@@ -5,7 +5,7 @@ use crate::components::formater::{
 #[cfg(feature = "hconfig")]
 use crate::Errors;
 #[cfg(feature = "hconfig")]
-use Hconfig::tinyjson::JsonValue;
+use hconfig::tinyjson::JsonValue;
 
 /// note: if byThreadId is false, bySrc is false and forceInOneFile is None, no trace will be written
 pub struct FileConfig
@@ -90,7 +90,7 @@ impl FileConfig
 	-> Result<Self, Errors>
 	{
 		use crate::modules::utils_hconfig::{notAnObject, setConfig_String, setConfig_boolean};
-		use Hconfig::tinyjson::JsonValue;
+		use hconfig::tinyjson::JsonValue;
 
 		newConfig.purgeAfterDays = newConfig.purgeAfterDays.filter(|days| *days > 0);
 		let JsonValue::Object(config) = configs

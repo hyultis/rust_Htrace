@@ -13,13 +13,14 @@ pub mod command_line_config;
 #[cfg(feature = "hconfig")]
 pub mod utils_hconfig
 {
-	use Hconfig::tinyjson::JsonValue;
+	use hconfig::tinyjson::JsonValue;
 	use std::collections::HashMap;
 
 	/// Look up `moduleKey` in the loaded Hconfig `configName` and apply `create` to it.
 	/// A missing config is reported as `CannotFoundConfigNode("configName/moduleKey")`;
-	/// a key that cannot be reached (a parent node is not an object) as
-	/// `CannotFoundConfigNode("moduleKey")`. A missing key is created by Hconfig.
+	/// a key that cannot be reached (a node on the path is not an object) as
+	/// `CannotFoundConfigNode("moduleKey")`. A missing key below objects is created
+	/// as an empty object, then filled by `create`.
 	pub(crate) fn fromHconfig<T>(
 		configName: &str,
 		moduleKey: &str,
@@ -28,32 +29,70 @@ pub mod utils_hconfig
 	) -> Result<T, crate::Errors>
 	{
 		use crate::Errors;
-		use Hconfig::HConfigManager::HConfigManager;
+		use hconfig::HConfigManager::HConfigManager;
+		use std::sync::PoisonError;
 
-		let Some(mut config) = HConfigManager::singleton().get(configName)
+		let Some(config) = HConfigManager::singleton().get(configName)
 		else
 		{
 			return Err(Errors::CannotFoundConfigNode(format!(
 				"{configName}/{moduleKey}"
 			)));
 		};
-		// Hconfig 2.0.2 can panic on an array index past its end (`arr/5/x`):
-		// treat that as an unreachable node instead of propagating the panic.
-		let reachable = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-			config.value_get_mut(moduleKey).is_some()
-		}))
-		.unwrap_or(false);
-		let node = match reachable
+		let mut config = config.write().unwrap_or_else(PoisonError::into_inner);
+		let unreachable = || Errors::CannotFoundConfigNode(moduleKey.to_string());
+		// Hconfig writes force their path (a scalar becomes an object, an array
+		// grows): only create the node when every existing node on it is an object.
+		match pathState(config.root_get(), moduleKey)
 		{
-			true => config.value_get_mut(moduleKey),
-			false => None,
-		};
-		let Some(node) = node
+			PathState::Exists => {}
+			PathState::Creatable => config.value_set(moduleKey, JsonValue::Object(HashMap::new())),
+			PathState::Unreachable => return Err(unreachable()),
+		}
+		let Some(node) = config.value_get_mut(moduleKey)
 		else
 		{
-			return Err(Errors::CannotFoundConfigNode(moduleKey.to_string()));
+			return Err(unreachable());
 		};
 		create(node, defaults)
+	}
+
+	enum PathState
+	{
+		Exists,
+		Creatable,
+		Unreachable,
+	}
+
+	/// Walk `path` like Hconfig does (empty segments ignored, unsigned integers
+	/// index arrays) without modifying anything.
+	fn pathState(root: &JsonValue, path: &str) -> PathState
+	{
+		// Hconfig ignores an empty path: there is no node to configure.
+		if path.split('/').all(str::is_empty)
+		{
+			return PathState::Unreachable;
+		}
+		let mut node = root;
+		for segment in path.split('/').filter(|segment| !segment.is_empty())
+		{
+			let next = match node
+			{
+				JsonValue::Object(object) => match object.get(segment)
+				{
+					Some(next) => next,
+					None => return PathState::Creatable,
+				},
+				JsonValue::Array(array) => match segment.parse::<usize>().ok().and_then(|index| array.get(index))
+				{
+					Some(next) => next,
+					None => return PathState::Unreachable,
+				},
+				_ => return PathState::Unreachable,
+			};
+			node = next;
+		}
+		PathState::Exists
 	}
 
 	/// Error returned when a module configuration node is not a JSON object.
@@ -112,7 +151,7 @@ pub mod utils_hconfig
 mod config_tests
 {
 	use super::utils_hconfig::*;
-	use Hconfig::tinyjson::JsonValue;
+	use hconfig::tinyjson::JsonValue;
 	use std::collections::HashMap;
 
 	#[test]

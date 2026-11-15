@@ -156,17 +156,19 @@ Use one owning file module per directory and keep the directory and its parents
 stable during execution. See [cleanup behavior and limits](docs/runtime.md#file-cleanup).
 
 With the `hconfig` feature, module configurations are read from a loaded
-Hconfig node; a missing node is created with the supplied defaults:
+Hconfig 3 node; a missing node is created with the supplied defaults. The
+Hconfig package is imported as `hconfig`:
 
 ```rust
 use htrace::modules::{command_line_config::CommandLineConfig, file_config::FileConfig};
-Hconfig::HConfigManager::HConfigManager::singleton().create::<Hconfig::IO::json::WrapperJson>("htrace")?;
+hconfig::HConfigManager::HConfigManager::singleton().create::<hconfig::IO::json::WrapperJson>("htrace")?;
 let console = CommandLineConfig::from_hconfig("htrace", "cmd", CommandLineConfig::default())?;
 let file = FileConfig::from_hconfig("htrace", "file", FileConfig::default())?;
 ```
 
 `Errors::CannotFoundConfigNode` reports an unloaded config or an unreachable
-node; `Errors::ModuleConfigError("file" | "command_line", cause)` reports a node
+node (a scalar or an array on the path, an out-of-range index, an empty key),
+which is left untouched; `Errors::ModuleConfigError("file" | "command_line", cause)` reports a node
 that is not a JSON object or an empty file `path`.
 
 | Feature | Purpose |
