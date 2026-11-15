@@ -23,6 +23,39 @@ pub(super) struct Retention
 	anchor: Option<(PathBuf, Metadata)>,
 }
 
+// Current destinations, canonicalized at most once per batch and only when a
+// candidate reaches the protected test.
+struct Protected<'a>
+{
+	paths: &'a [PathBuf],
+	canonical: Option<Vec<PathBuf>>,
+}
+
+impl<'a> Protected<'a>
+{
+	fn new(paths: &'a [PathBuf]) -> Self
+	{
+		Self {
+			paths,
+			canonical: None,
+		}
+	}
+
+	fn contains(&mut self, path: &Path) -> bool
+	{
+		let paths = self.paths;
+		self.canonical
+			.get_or_insert_with(|| {
+				paths
+					.iter()
+					.filter_map(|path| fs::canonicalize(path).ok())
+					.collect()
+			})
+			.iter()
+			.any(|protected| protected == path)
+	}
+}
+
 impl File
 {
 	fn hasDestinations(&self) -> bool
@@ -43,6 +76,8 @@ impl File
 		{
 			return Ok(());
 		}
+		// A new pass accepts the directory currently at the configured path.
+		state.retention.anchor = None;
 		self.purgeBegin(&mut state)?;
 		let mut firstError = None;
 		while state.retention.scan.is_some()
@@ -83,6 +118,10 @@ impl File
 				return Ok(());
 			}
 			state.retention.lastRun = Some(monotonic);
+			// A new pass accepts the directory currently at the configured path, so
+			// a directory recreated between passes does not block purge forever.
+			// An active pass keeps its anchor and strict checks.
+			state.retention.anchor = None;
 			self.purgeBegin(state)?;
 		}
 		self.purgeAdvance(state, protected, now)
@@ -174,6 +213,22 @@ impl File
 		Ok(())
 	}
 
+	// A failed root check ends the pass: nothing else from it may be deleted.
+	fn purgeCheckRootOrAbort(&self, state: &mut FileState) -> io::Result<()>
+	{
+		self.purgeCheckRoot(&state.retention).inspect_err(|_| {
+			state.retention.scan = None;
+		})
+	}
+
+	fn purgeAbortIfRootChanged(&self, state: &mut FileState)
+	{
+		if state.retention.scan.is_some()
+		{
+			let _ = self.purgeCheckRootOrAbort(state);
+		}
+	}
+
 	fn purgeBatch(
 		&self,
 		state: &mut FileState,
@@ -185,10 +240,7 @@ impl File
 		{
 			return Ok(());
 		}
-		let protected: Vec<_> = protected
-			.iter()
-			.filter_map(|path| fs::canonicalize(path).ok())
-			.collect();
+		let mut protected = Protected::new(protected);
 		let mut firstError = None;
 		let mut removed = 0;
 		for _ in 0..ENTRY_BUDGET
@@ -206,24 +258,18 @@ impl File
 					break;
 				}
 				Some(Err(error)) => Err(error),
-				Some(Ok(entry)) =>
-				{
-					if let Err(error) = self.purgeCheckRoot(&state.retention)
-					{
-						state.retention.scan = None;
-						Err(error)
-					}
-					else
-					{
-						self.purgeEntry(state, &entry.file_name(), &protected, age)
-							.map(|deleted| {
-								removed += usize::from(deleted);
-							})
-					}
-				}
+				// The root is verified before each deletion, not per entry read.
+				Some(Ok(entry)) => self
+					.purgeEntry(state, &entry.file_name(), &mut protected, age)
+					.map(|deleted| {
+						removed += usize::from(deleted);
+					}),
 			};
 			if let Err(error) = result
 			{
+				// An entry error may come from a replaced root: never continue
+				// that enumeration once the root no longer matches its anchor.
+				self.purgeAbortIfRootChanged(state);
 				self._purgeErrors.fetch_add(1, Ordering::Relaxed);
 				if firstError.is_none()
 				{
@@ -242,7 +288,7 @@ impl File
 		&self,
 		state: &mut FileState,
 		name: &OsStr,
-		protected: &[PathBuf],
+		protected: &mut Protected<'_>,
 		age: Option<(SystemTime, Duration)>,
 	) -> io::Result<bool>
 	{
@@ -281,6 +327,9 @@ impl File
 			));
 		}
 
+		// The candidate is selected: verify the root before any side effect.
+		self.purgeCheckRootOrAbort(state)?;
+
 		// Close all cached spellings of this destination while holding the writer lock.
 		let mut index = 0;
 		while index < state.files.len()
@@ -311,6 +360,7 @@ impl File
 		{
 			return Ok(false);
 		}
+		// Final check; on failure purgeBatch rechecks the root and ends the pass.
 		self.purgeCheckRoot(&state.retention)?;
 		fs::remove_file(path)?;
 		self._purgedFiles.fetch_add(1, Ordering::Relaxed);
@@ -395,6 +445,7 @@ mod tests
 				purgeOnStartup: startup,
 				..FileConfig::default()
 			})
+			.unwrap()
 		}
 
 		fn put(&self, name: impl AsRef<Path>, modified: SystemTime) -> PathBuf
@@ -543,7 +594,8 @@ mod tests
 				purgeOnStartup: startup,
 				byThreadId: active,
 				..FileConfig::default()
-			});
+			})
+			.unwrap();
 			output.event_onStartup().unwrap();
 			output.flush().unwrap();
 			run(&output, clock(), Instant::now());
@@ -557,7 +609,8 @@ mod tests
 			purgeOnStartup: true,
 			purgeAfterDays: Some(1),
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		output.event_onStartup().unwrap();
 		run(&output, clock(), Instant::now());
 		assert!(keep.exists());
@@ -668,7 +721,8 @@ mod tests
 			path: root.to_str().unwrap().to_owned(),
 			purgeOnStartup: true,
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		assert!(output.event_onStartup().is_err());
 		assert_eq!(output.stats().purgeErrors, 1);
 		fs::remove_file(&root).unwrap();
@@ -690,7 +744,8 @@ mod tests
 			path: root.to_str().unwrap().to_owned(),
 			purgeAfterDays: Some(1),
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		let monotonic = Instant::now();
 		let mut state = output._files.lock();
 		assert!(
@@ -713,6 +768,57 @@ mod tests
 		assert!(!old.exists());
 		assert_eq!(output.stats().purgeRuns, 2);
 		assert_eq!(output.stats().purgeErrors, 1);
+	}
+
+	#[test]
+	fn directory_recreated_between_passes_is_purged_by_the_next_pass()
+	{
+		let directory = TestDirectory::new();
+		let root = directory.0.join("root");
+		fs::create_dir(&root).unwrap();
+		let first = root.join("first.trc");
+		fs::write(&first, b"first").unwrap();
+		setModified(&first, clock() - Duration::from_secs(172_800));
+		let output = File::new(FileConfig {
+			path: root.to_str().unwrap().to_owned(),
+			purgeAfterDays: Some(1),
+			..FileConfig::default()
+		})
+		.unwrap();
+		let monotonic = Instant::now();
+		let mut state = output._files.lock();
+		output
+			.purgePeriodic(&mut state, &[], clock(), monotonic)
+			.unwrap();
+		while state.retention.scan.is_some()
+		{
+			output.purgeAdvance(&mut state, &[], clock()).unwrap();
+		}
+		assert!(!first.exists());
+		// Delete and recreate the directory between passes. The previous one is
+		// removed only after creation so the new directory has another identity.
+		fs::rename(&root, directory.0.join("previous")).unwrap();
+		fs::create_dir(&root).unwrap();
+		fs::remove_dir_all(directory.0.join("previous")).unwrap();
+		// Every later pass must keep working, not only the first one.
+		for pass in 1..=2
+		{
+			let next = root.join(format!("next-{pass}.trc"));
+			fs::write(&next, b"next").unwrap();
+			setModified(&next, clock() - Duration::from_secs(172_800));
+			let later = monotonic + PURGE_INTERVAL * pass;
+			output
+				.purgePeriodic(&mut state, &[], clock(), later)
+				.unwrap();
+			while state.retention.scan.is_some()
+			{
+				output.purgeAdvance(&mut state, &[], clock()).unwrap();
+			}
+			assert!(!next.exists());
+		}
+		assert_eq!(output.stats().purgeRuns, 3);
+		assert_eq!(output.stats().purgedFiles, 3);
+		assert_eq!(output.stats().purgeErrors, 0);
 	}
 
 	#[test]
@@ -761,7 +867,8 @@ mod tests
 				path: format!("{}{suffix}", linkedRoot.display()),
 				purgeOnStartup: true,
 				..FileConfig::default()
-			});
+			})
+			.unwrap();
 			assert!(output.event_onStartup().is_err());
 			assert_eq!(output.stats().purgeErrors, 1);
 			assert_eq!(fs::read(&sentinel).unwrap(), b"existing\n");
@@ -806,7 +913,8 @@ mod tests
 			path: root.to_str().unwrap().to_owned(),
 			purgeAfterDays: Some(1),
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		let mut state = output._files.lock();
 		output.purgeBegin(&mut state).unwrap();
 		// Deterministic replacement between anchoring and a candidate check.

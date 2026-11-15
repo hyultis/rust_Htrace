@@ -1,23 +1,46 @@
 #![allow(non_snake_case)]
 
-use htrace::HTrace;
 use htrace::components::context::Context;
+use htrace::components::formater::{FormaterCompile, FormaterCompiled, FormaterParamBuilder};
 use htrace::components::level::Level;
 use htrace::components::trace::OneTrace;
 #[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
 use htrace::crates::bridge::HtraceBridge;
 use htrace::htracer::HTracer;
+#[cfg(feature = "default_module")]
+use htrace::modules::file::File;
+#[cfg(feature = "default_module")]
+use htrace::modules::file_config::FileConfig;
 use htrace::modules::module_abstract::ModuleAbstract;
+use htrace::{HTrace, Spaned};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::{Duration, Instant};
+
+const MODES: [&str; 11] = [
+	"filtered",
+	"simple",
+	"formatted",
+	"backtrace",
+	"slow",
+	"spans3",
+	"span_per_trace",
+	"render",
+	"file",
+	"log",
+	"tracing",
+];
+const RENDER_FORMAT: &str = "{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}";
+const RENDER_LINE_RETURN: &str = " | ";
 
 struct Counter
 {
 	name: String,
 	received: Arc<AtomicUsize>,
 	slow: bool,
+	/// Approximates per-module worker rendering with the default formatter.
+	render: Option<(FormaterCompiled, String)>,
 }
 
 impl Counter
@@ -25,6 +48,10 @@ impl Counter
 	fn receive(&self, trace: &OneTrace)
 	{
 		std::hint::black_box(trace);
+		if let Some((compiled, lineReturn)) = &self.render
+		{
+			std::hint::black_box(compiled.render(FormaterParamBuilder(trace, lineReturn)));
+		}
 		if self.slow
 		{
 			thread::sleep(Duration::from_micros(100));
@@ -96,10 +123,85 @@ fn emit(mode: &str, producer: usize, index: usize)
 		{
 			HTrace!((Level::ERROR) "benchmark");
 		}
+		"span_per_trace" =>
+		{
+			let mut context = Context::default();
+			context.name_set("bench");
+			Spaned!(context);
+			HTrace!("benchmark");
+		}
+		#[cfg(feature = "log_consumer")]
+		"log" =>
+		{
+			log::info!("benchmark");
+		}
+		#[cfg(feature = "tracing_consumer")]
+		"tracing" =>
+		{
+			tracing::info!("benchmark");
+		}
 		_ =>
 		{
 			HTrace!("benchmark");
 		}
+	}
+}
+
+/// Run a producer body inside the per-producer scope required by the mode.
+fn producerScope(mode: &str, body: impl FnOnce() -> Vec<u128>) -> Vec<u128>
+{
+	match mode
+	{
+		"spans3" =>
+		{
+			let mut outer = Context::default();
+			outer.name_set("bench outer");
+			Spaned!(outer);
+			let mut middle = Context::default();
+			middle.name_set("bench middle");
+			Spaned!(middle);
+			let mut inner = Context::default();
+			inner.name_set("bench inner");
+			Spaned!(inner);
+			body()
+		}
+		#[cfg(feature = "tracing_consumer")]
+		"tracing" =>
+		{
+			let _entered = tracing::info_span!("bench").entered();
+			body()
+		}
+		_ => body(),
+	}
+}
+
+/// Fresh trace directory for the file mode, removed when dropped.
+#[cfg(feature = "default_module")]
+struct TempDirectory(std::path::PathBuf);
+
+#[cfg(feature = "default_module")]
+impl TempDirectory
+{
+	fn create() -> Result<Self, Box<dyn std::error::Error>>
+	{
+		let path = std::env::temp_dir().join(format!(
+			"htrace-benchmark-file-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)?
+				.as_nanos()
+		));
+		std::fs::create_dir(&path)?;
+		Ok(Self(path))
+	}
+}
+
+#[cfg(feature = "default_module")]
+impl Drop for TempDirectory
+{
+	fn drop(&mut self)
+	{
+		let _ = std::fs::remove_dir_all(&self.0);
 	}
 }
 
@@ -131,12 +233,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 	let args = std::env::args().skip(1).collect::<Vec<_>>();
 	if args.len() != 3
 	{
-		return Err("usage: benchmark filtered|simple|formatted|backtrace|slow PRODUCERS TRACES_PER_PRODUCER".into());
+		return Err(format!(
+			"usage: benchmark {} PRODUCERS TRACES_PER_PRODUCER",
+			MODES.join("|")
+		)
+		.into());
 	}
 	let mode = args[0].clone();
-	if !["filtered", "simple", "formatted", "backtrace", "slow"].contains(&mode.as_str())
+	if !MODES.contains(&mode.as_str())
 	{
 		return Err("unknown benchmark mode".into());
+	}
+	#[cfg(not(feature = "default_module"))]
+	if mode == "file"
+	{
+		return Err("mode file requires feature default_module".into());
+	}
+	#[cfg(not(feature = "log_consumer"))]
+	if mode == "log"
+	{
+		return Err("mode log requires feature log_consumer".into());
+	}
+	#[cfg(not(feature = "tracing_consumer"))]
+	if mode == "tracing"
+	{
+		return Err("mode tracing requires feature tracing_consumer".into());
 	}
 	let producers: usize = args[1].parse()?;
 	let traces: usize = args[2].parse()?;
@@ -173,12 +294,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 			name: "counter".to_string(),
 			received: received.clone(),
 			slow: mode == "slow",
+			render: (mode == "render").then(|| {
+				(
+					FormaterCompile(&RENDER_FORMAT.to_string()),
+					RENDER_LINE_RETURN.to_string(),
+				)
+			}),
 		},
 	);
+	// Real file output (byThreadId default layout) alongside the counter.
+	#[cfg(feature = "default_module")]
+	let mut fileOutput: Option<(Arc<File>, TempDirectory)> = None;
+	#[cfg(feature = "default_module")]
+	if mode == "file"
+	{
+		let directory = TempDirectory::create()?;
+		let file = Arc::new(File::new(FileConfig {
+			path: directory.0.to_string_lossy().into_owned(),
+			..FileConfig::default()
+		})?);
+		context.module_add_arc("file", file.clone());
+		fileOutput = Some((file, directory));
+	}
 	#[cfg(not(any(feature = "tracing_consumer", feature = "log_consumer")))]
-	HTracer::globalContext_set(context);
+	HTracer::globalContext_set(context).expect("Htrace configuration failed");
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(context, HtraceBridge::default());
+	HTracer::globalContext_set(context, HtraceBridge::default())
+		.expect("Htrace configuration failed");
 
 	// Warm one call without terminating the singleton. Account for it separately.
 	emit(&mode, 0, 0);
@@ -235,16 +377,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 		let barrier = barrier.clone();
 		let completedCalls = completedCalls.clone();
 		workers.push(thread::spawn(move || {
-			let mut samples = Vec::with_capacity(traces);
-			barrier.wait();
-			for index in 0..traces
-			{
-				let start = Instant::now();
-				emit(&mode, producer, index);
-				samples.push(start.elapsed().as_nanos());
-				completedCalls.fetch_add(1, Ordering::Release);
-			}
-			samples
+			producerScope(&mode, || {
+				let mut samples = Vec::with_capacity(traces);
+				barrier.wait();
+				for index in 0..traces
+				{
+					let start = Instant::now();
+					emit(&mode, producer, index);
+					samples.push(start.elapsed().as_nanos());
+					completedCalls.fetch_add(1, Ordering::Release);
+				}
+				samples
+			})
 		}));
 	}
 	let start = Instant::now();
@@ -311,6 +455,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 	if actual != expected
 	{
 		return Err("received trace count differs from expected; benchmark invalid".into());
+	}
+	#[cfg(feature = "default_module")]
+	if let Some((file, _directory)) = &fileOutput
+	{
+		let stats = file.stats();
+		let errors = stats.createErrors + stats.openErrors + stats.writeErrors + stats.flushErrors;
+		let expectedLines = (expected + warmupExpected) as u64;
+		if stats.linesWritten != expectedLines || errors != 0
+		{
+			return Err(format!(
+				"file module wrote {} lines (expected {expectedLines}) with {errors} I/O errors; benchmark invalid",
+				stats.linesWritten
+			)
+			.into());
+		}
 	}
 	Ok(())
 }

@@ -50,6 +50,7 @@ impl Fixture
 			purgeOnStartup: true,
 			..FileConfig::default()
 		})
+		.unwrap()
 	}
 
 	fn assertOutside(&self)
@@ -75,8 +76,8 @@ fn trace() -> OneTrace
 		message: "audit append".to_owned(),
 		date: time::macros::datetime!(2026-01-02 12:00 UTC),
 		level: Level::NORMAL,
-		context: Context::default(),
-		filename: "audit.rs".to_owned(),
+		context: std::sync::Arc::new(Context::default()),
+		filename: "audit.rs".into(),
 		fileline: 1,
 		backtraces: Vec::new(),
 	}
@@ -114,7 +115,9 @@ fn direct_entry_calls_reject_absolute_parent_and_multiple_components()
 	for name in names.drain(..)
 	{
 		assert!(
-			!output.purgeEntry(&mut state, &name, &[], None).unwrap(),
+			!output
+				.purgeEntry(&mut state, &name, &mut Protected::new(&[]), None)
+				.unwrap(),
 			"{name:?}"
 		);
 		assert_eq!(fs::read(&eligible).unwrap(), SENTINEL);
@@ -123,7 +126,12 @@ fn direct_entry_calls_reject_absolute_parent_and_multiple_components()
 	}
 	assert!(
 		output
-			.purgeEntry(&mut state, OsStr::new("eligible.trc"), &[], None)
+			.purgeEntry(
+				&mut state,
+				OsStr::new("eligible.trc"),
+				&mut Protected::new(&[]),
+				None
+			)
 			.unwrap()
 	);
 	assert!(!eligible.exists());
@@ -139,7 +147,8 @@ fn filesystem_root_is_refused_without_enumeration_or_deletion()
 	let output = File::new(FileConfig {
 		path: root.to_str().unwrap().to_owned(),
 		..FileConfig::default()
-	});
+	})
+	.unwrap();
 	// Only the read-only root validator is called: never run a purge on a real root.
 	assert!(output.purgeRoot().is_err());
 	assert_eq!(output.stats().purgeRuns, 0);
@@ -279,7 +288,8 @@ fn windows_ambiguous_trailing_space_root_preserves_both_directories()
 		path: configured.into_string().unwrap(),
 		purgeOnStartup: true,
 		..FileConfig::default()
-	});
+	})
+	.unwrap();
 	assert!(output.event_onStartup().is_err());
 	assert_eq!(fs::read(ordinaryLog).unwrap(), b"ordinary sentinel\n");
 	assert_eq!(fs::read(spacedLog).unwrap(), b"trailing-space sentinel\n");
@@ -388,7 +398,8 @@ fn root_symlinks_with_trailing_separator_and_dot_are_rejected()
 			path: format!("{}{suffix}", link.display()),
 			purgeOnStartup: true,
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		assert!(output.event_onStartup().is_err(), "{suffix:?}");
 		assert_eq!(output.stats().purgedFiles, 0);
 		assert_eq!(output.stats().purgeErrors, 1);
@@ -411,7 +422,8 @@ fn force_in_one_file_parent_destination_is_written_but_never_purged()
 		purgeAfterDays: Some(1),
 		purgeOnStartup: true,
 		..FileConfig::default()
-	});
+	})
+	.unwrap();
 	output.event_onStartup().unwrap();
 	assert!(!inside.exists());
 	assert_eq!(fs::read(&historical).unwrap(), SENTINEL);
@@ -463,7 +475,11 @@ fn stale_enumerated_name_cannot_delete_a_replacement_root_candidate()
 	fs::create_dir(fixture.root()).unwrap();
 	let replacement = fixture.put(Path::new("root").join(&name));
 	// Directly exercise the final root check with a stale enumerated component.
-	assert!(output.purgeEntry(&mut state, &name, &[], None).is_err());
+	assert!(
+		output
+			.purgeEntry(&mut state, &name, &mut Protected::new(&[]), None)
+			.is_err()
+	);
 	assert_eq!(fs::read(replacement).unwrap(), SENTINEL);
 	assert_eq!(
 		fs::read(fixture.0.join("previous-root").join(name)).unwrap(),
@@ -486,7 +502,8 @@ fn stale_enumeration_rejects_redirected_ancestor_even_with_same_root_inode()
 	let output = File::new(FileConfig {
 		path: ancestor.join("root").to_str().unwrap().to_owned(),
 		..FileConfig::default()
-	});
+	})
+	.unwrap();
 	let mut state = output._files.lock();
 	output.purgeBegin(&mut state).unwrap();
 	let name = state
@@ -507,10 +524,55 @@ fn stale_enumeration_rejects_redirected_ancestor_even_with_same_root_inode()
 		original,
 		&fs::symlink_metadata(ancestor.join("root")).unwrap()
 	));
-	assert!(output.purgeEntry(&mut state, &name, &[], None).is_err());
+	assert!(
+		output
+			.purgeEntry(&mut state, &name, &mut Protected::new(&[]), None)
+			.is_err()
+	);
 	assert_eq!(fs::read(moved.join("root").join(name)).unwrap(), SENTINEL);
 	fixture.assertOutside();
 	assert_eq!(output.stats().purgedFiles, 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn root_replaced_after_enumeration_is_detected_before_any_deletion()
+{
+	use std::os::unix::fs::symlink;
+	for symlinked in [false, true]
+	{
+		let fixture = Fixture::new();
+		fixture.put("root/sentinel.trc");
+		let output = fixture.output();
+		let mut state = output._files.lock();
+		output.purgeBegin(&mut state).unwrap();
+		// Unix keeps enumerating the moved directory through the open handle, so
+		// the enumerated name is resolved against the replacement root.
+		let previous = fixture.0.join("previous-root");
+		fs::rename(fixture.root(), &previous).unwrap();
+		if symlinked
+		{
+			// The candidate resolves outside: the entry error ends the pass.
+			symlink(fixture.0.join("root-sibling"), fixture.root()).unwrap();
+		}
+		else
+		{
+			// The replacement candidate passes every candidate check; only the
+			// root check made before deletion can stop it.
+			fs::create_dir(fixture.root()).unwrap();
+			fixture.put("root/sentinel.trc");
+		}
+		assert!(output.purgeBatch(&mut state, &[], None).is_err());
+		assert!(state.retention.scan.is_none());
+		assert_eq!(fs::read(previous.join("sentinel.trc")).unwrap(), SENTINEL);
+		assert_eq!(
+			fs::read(fixture.root().join("sentinel.trc")).unwrap(),
+			SENTINEL
+		);
+		fixture.assertOutside();
+		assert_eq!(output.stats().purgedFiles, 0);
+		assert_eq!(output.stats().purgeErrors, 1);
+	}
 }
 
 #[test]
@@ -530,7 +592,8 @@ fn relative_configuration_is_frozen_in_a_child_process()
 			lineFormat: "{msg}".to_owned(),
 			purgeOnStartup: true,
 			..FileConfig::default()
-		});
+		})
+		.unwrap();
 		std::env::set_current_dir(base.join("root-sibling")).unwrap();
 		output.event_onStartup().unwrap();
 		output.event_onNormal(&trace());

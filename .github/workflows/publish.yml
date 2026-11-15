@@ -40,6 +40,14 @@ jobs:
       matrix:
         toolchain: ['1.97.0', '1.99.0']
         features: [default, minimal, all]
+        # Isolated bridge feature sets, on the release toolchain only.
+        include:
+          - toolchain: '1.99.0'
+            features: log
+          - toolchain: '1.99.0'
+            features: tracing
+          - toolchain: '1.99.0'
+            features: bridges
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -63,6 +71,11 @@ jobs:
           case "$FEATURE_SET" in
             minimal) args+=(--no-default-features) ;;
             all) args+=(--all-features) ;;
+            log) args+=(--features log_consumer) ;;
+            tracing) args+=(--features tracing_consumer) ;;
+            bridges) args+=(--no-default-features --features log_consumer,tracing_consumer) ;;
+            default) ;;
+            *) echo "Unknown feature set: $FEATURE_SET" >&2; exit 1 ;;
           esac
           cargo +"$TOOLCHAIN" test --locked "${args[@]}"
 

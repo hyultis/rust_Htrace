@@ -26,6 +26,8 @@ pub trait ModuleAbstract: Sync + Send
 
 	fn event_onContextExit(&self, context: &Context);
 
+	/// Called once at shutdown, on the modules of the current global context
+	/// only; a replaced global context receives `event_onContextExit` instead.
 	fn event_onGlobalExit(&self);
 
 	/// Flush buffered output. This does not imply a filesystem sync.

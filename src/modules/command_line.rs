@@ -49,7 +49,8 @@ impl CommandLine
 			.iter_mut()
 			.for_each(|x| **x = x.style(color).to_string());
 
-		let line = format!("{}\n", self._formaterCompiled.render(parameters));
+		let mut line = self._formaterCompiled.render(parameters);
+		line.push('\n');
 		let _ = self.writeLine(&mut io::stdout().lock(), line.as_bytes());
 	}
 

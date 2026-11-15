@@ -26,22 +26,25 @@ fn temporaryDirectory() -> PathBuf
 
 fn output(path: &Path) -> Arc<File>
 {
-	Arc::new(File::new(FileConfig {
-		path: path.to_string_lossy().into_owned(),
-		lineFormat: "{msg}".to_string(),
-		byThreadId: false,
-		forceInOneFile: Some("all".to_string()),
-		purgeOnStartup: true,
-		..FileConfig::default()
-	}))
+	Arc::new(
+		File::new(FileConfig {
+			path: path.to_string_lossy().into_owned(),
+			lineFormat: "{msg}".to_string(),
+			byThreadId: false,
+			forceInOneFile: Some("all".to_string()),
+			purgeOnStartup: true,
+			..FileConfig::default()
+		})
+		.unwrap(),
+	)
 }
 
 fn install(context: Context)
 {
 	#[cfg(not(any(feature = "tracing_consumer", feature = "log_consumer")))]
-	HTracer::globalContext_set(context);
+	HTracer::globalContext_set(context).unwrap();
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(context, HtraceBridge::default());
+	HTracer::globalContext_set(context, HtraceBridge::default()).unwrap();
 }
 
 #[test]
@@ -87,7 +90,7 @@ fn startup_without_traces_and_reconfiguration()
 	context.module_add_arc("files", files.clone());
 	context.module_add_arc("late", late.clone());
 	install(context);
-	HTracer::trace(&"new trace", Level::NORMAL, file!(), line!(), Vec::new());
+	HTracer::trace(&"new trace", Level::NORMAL, file!(), line!(), None);
 	HTracer::shutdown_timeout(Duration::from_secs(5)).unwrap();
 	assert_eq!(
 		std::fs::read_to_string(root.join("new.trc")).unwrap(),
@@ -117,7 +120,7 @@ fn startup_runs_again_in_new_process()
 		let mut context = Context::default();
 		context.module_add_arc("files", files.clone());
 		install(context);
-		HTracer::trace(&"session line", Level::NORMAL, file!(), line!(), Vec::new());
+		HTracer::trace(&"session line", Level::NORMAL, file!(), line!(), None);
 		HTracer::shutdown_timeout(Duration::from_secs(5)).unwrap();
 		assert_eq!(files.stats().purgedFiles, 1);
 		assert_eq!(files.stats().linesWritten, 1);

@@ -1,11 +1,12 @@
-use super::{ControlError, Stats};
+use super::{ControlError, HTracer, RawBacktrace, Stats};
 use crate::components::context::Context;
 use crate::components::level::Level;
 use crate::components::trace::OneTrace;
 use crate::modules::module_abstract::ModuleAbstract;
-use parking_lot::{Condvar, Mutex};
+use parking_lot::{Condvar, Mutex, RwLock};
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak, mpsc};
@@ -28,8 +29,9 @@ pub(super) fn is_worker() -> bool
 
 enum Command
 {
-	Trace(OneTrace),
-	ContextExit(Context),
+	/// The raw backtrace is resolved into `OneTrace::backtraces` by the worker.
+	Trace(OneTrace, Option<RawBacktrace>),
+	ContextExit(Arc<Context>),
 	Register(Vec<WeakModule>),
 	Flush(mpsc::Sender<ControlResult>),
 	Shutdown,
@@ -43,27 +45,69 @@ struct Admission
 	closed: bool,
 }
 
+/// Keeps a value away from its neighbours' cache lines (two lines, to also
+/// defeat adjacent-line prefetching), so writers do not invalidate readers.
+#[derive(Default)]
+#[repr(align(128))]
+struct CachePadded<T>(T);
+
+impl<T> Deref for CachePadded<T>
+{
+	type Target = T;
+
+	fn deref(&self) -> &T
+	{
+		&self.0
+	}
+}
+
+/// Written by producers.
+#[derive(Default)]
+struct ProducerCounters
+{
+	accepted: AtomicU64,
+	rejected: AtomicU64,
+}
+
+/// Written by the worker only.
+#[derive(Default)]
+struct WorkerCounters
+{
+	/// Traces taken from the queue (before their callbacks run).
+	dequeued: AtomicU64,
+	processed: AtomicU64,
+	moduleErrors: AtomicU64,
+}
+
+/// Read by every producer, written rarely.
+#[derive(Default)]
+struct State
+{
+	/// Admission hint: set when start succeeds, cleared under the admission
+	/// write lock on closure. `send_trace` stays the source of truth.
+	accepting: AtomicBool,
+	finished: AtomicBool,
+}
+
 #[derive(Default)]
 struct Shared
 {
-	accepted: AtomicU64,
-	processed: AtomicU64,
-	rejected: AtomicU64,
-	moduleErrors: AtomicU64,
+	producer: CachePadded<ProducerCounters>,
+	worker: CachePadded<WorkerCounters>,
+	state: CachePadded<State>,
 	workerErrors: AtomicU64,
-	queued: AtomicU64,
-	finished: AtomicBool,
 	completion: Mutex<Option<ControlResult>>,
 	completed: Condvar,
 }
 
 /// Owns admission and a detached worker. The unbounded queue never blocks on I/O.
-/// A successful send while holding admission is the acceptance point; closing
-/// admission and sending Shutdown under that same lock excludes later traces.
+/// A successful send while holding admission (read mode, shared by producers)
+/// is the acceptance point; closing admission and sending Shutdown under the
+/// write lock excludes later traces and orders every accepted one before it.
 #[derive(Default)]
 pub(super) struct Runtime
 {
-	admission: Mutex<Admission>,
+	admission: CachePadded<RwLock<Admission>>,
 	shared: Arc<Shared>,
 }
 
@@ -71,7 +115,7 @@ impl Runtime
 {
 	pub(super) fn start(&self, modules: Vec<WeakModule>) -> ControlResult
 	{
-		let mut admission = self.admission.lock();
+		let mut admission = self.admission.write();
 		if admission.closed
 		{
 			return Err(ControlError::Closed);
@@ -102,7 +146,7 @@ impl Runtime
 					}
 				};
 				*shared.completion.lock() = Some(result);
-				shared.finished.store(true, Ordering::Release);
+				shared.state.finished.store(true, Ordering::Release);
 				shared.completed.notify_all();
 				IN_WORKER.with(|active| active.set(false));
 			});
@@ -114,6 +158,8 @@ impl Runtime
 				// Completion is observed separately: no join can extend a timeout.
 				drop(handle);
 				admission.sender = Some(sender);
+				// Release: a producer seeing it also sees the published context.
+				self.shared.state.accepting.store(true, Ordering::Release);
 				Ok(())
 			}
 			Err(_) =>
@@ -121,32 +167,44 @@ impl Runtime
 				admission.closed = true;
 				self.shared.workerErrors.fetch_add(1, Ordering::Relaxed);
 				*self.shared.completion.lock() = Some(Err(ControlError::Unavailable));
-				self.shared.finished.store(true, Ordering::Release);
+				self.shared.state.finished.store(true, Ordering::Release);
 				Err(ControlError::Unavailable)
 			}
 		}
 	}
 
+	/// Admission is closed for good (shutdown requested or completed, or failed
+	/// start) or the worker has finished: no configuration can be applied.
+	pub(super) fn is_terminated(&self) -> bool
+	{
+		self.shared.state.finished.load(Ordering::Acquire) || self.admission.read().closed
+	}
+
+	/// Lock-free hint (a worker failure is seen through `finished`); a trace
+	/// passing it can still be rejected by `send_trace`.
 	pub(super) fn is_accepting(&self) -> bool
 	{
-		!is_worker()
-			&& !self.shared.finished.load(Ordering::Acquire)
-			&& self.admission.lock().sender.is_some()
+		self.shared.state.accepting.load(Ordering::Acquire)
+			&& !self.shared.state.finished.load(Ordering::Acquire)
+			&& !is_worker()
 	}
 
 	pub(super) fn reject(&self)
 	{
-		self.shared.rejected.fetch_add(1, Ordering::Relaxed);
+		self.shared
+			.producer
+			.rejected
+			.fetch_add(1, Ordering::Relaxed);
 	}
 
-	pub(super) fn send_trace(&self, trace: OneTrace) -> bool
+	pub(super) fn send_trace(&self, trace: OneTrace, backtrace: Option<RawBacktrace>) -> bool
 	{
 		if is_worker()
 		{
 			self.reject();
 			return false;
 		}
-		let admission = self.admission.lock();
+		let admission = self.admission.read();
 		let Some(sender) = &admission.sender
 		else
 		{
@@ -154,15 +212,16 @@ impl Runtime
 			self.reject();
 			return false;
 		};
-		self.shared.queued.fetch_add(1, Ordering::Relaxed);
-		let result = sender.send(Command::Trace(trace));
+		let result = sender.send(Command::Trace(trace, backtrace));
 		if result.is_ok()
 		{
-			self.shared.accepted.fetch_add(1, Ordering::Relaxed);
+			self.shared
+				.producer
+				.accepted
+				.fetch_add(1, Ordering::Relaxed);
 		}
 		else
 		{
-			self.shared.queued.fetch_sub(1, Ordering::Relaxed);
 			self.shared.workerErrors.fetch_add(1, Ordering::Relaxed);
 			self.reject();
 		}
@@ -172,7 +231,7 @@ impl Runtime
 		result.is_ok()
 	}
 
-	pub(super) fn context_exit(&self, context: Context)
+	pub(super) fn context_exit(&self, context: Arc<Context>)
 	{
 		if is_worker()
 		{
@@ -189,7 +248,7 @@ impl Runtime
 
 	fn send_auxiliary(&self, command: Command)
 	{
-		let admission = self.admission.lock();
+		let admission = self.admission.read();
 		let available = admission.sender.is_some();
 		let result = match &admission.sender
 		{
@@ -210,7 +269,9 @@ impl Runtime
 			return Err(ControlError::Reentrant);
 		}
 		let begin = Instant::now();
-		let Some(admission) = self.admission.try_lock_for(timeout)
+		// Read mode suffices: a trace accepted before this call is already queued
+		// ahead of the barrier, and shutdown (write mode) is excluded.
+		let Some(admission) = self.admission.try_read_for(timeout)
 		else
 		{
 			return Err(ControlError::Timeout);
@@ -252,12 +313,15 @@ impl Runtime
 			return Err(ControlError::Reentrant);
 		}
 		let begin = Instant::now();
-		let Some(mut admission) = self.admission.try_lock_for(timeout)
+		// Write mode waits for in-flight sends: every accepted trace precedes
+		// Shutdown in the queue and no send can follow it.
+		let Some(mut admission) = self.admission.try_write_for(timeout)
 		else
 		{
 			return Err(ControlError::Timeout);
 		};
 		admission.closed = true;
+		self.shared.state.accepting.store(false, Ordering::Release);
 		let sender = admission.sender.take();
 		let started = admission.started;
 		let sendFailed = sender
@@ -298,13 +362,18 @@ impl Runtime
 
 	pub(super) fn stats(&self) -> Stats
 	{
+		// Producers and the worker count on separate cache lines; the queue
+		// length is derived. A trace is counted as accepted just after its send,
+		// so a concurrent sample may briefly see it dequeued first: saturate.
+		let dequeued = self.shared.worker.dequeued.load(Ordering::Relaxed);
+		let accepted = self.shared.producer.accepted.load(Ordering::Relaxed);
 		Stats {
-			accepted: self.shared.accepted.load(Ordering::Relaxed),
-			processed: self.shared.processed.load(Ordering::Relaxed),
-			rejected: self.shared.rejected.load(Ordering::Relaxed),
-			moduleErrors: self.shared.moduleErrors.load(Ordering::Relaxed),
+			accepted,
+			processed: self.shared.worker.processed.load(Ordering::Relaxed),
+			rejected: self.shared.producer.rejected.load(Ordering::Relaxed),
+			moduleErrors: self.shared.worker.moduleErrors.load(Ordering::Relaxed),
 			workerErrors: self.shared.workerErrors.load(Ordering::Relaxed),
-			queued: self.shared.queued.load(Ordering::Relaxed),
+			queued: accepted.saturating_sub(dequeued),
 			..Stats::default()
 		}
 	}
@@ -315,6 +384,9 @@ struct Worker
 	shared: Arc<Shared>,
 	pending: HashMap<usize, Module>,
 	registry: HashMap<usize, WeakModule>,
+	/// Modules of the current global configuration (last `Register`), the only
+	/// ones notified by `event_onGlobalExit` at shutdown.
+	global: Vec<WeakModule>,
 }
 
 impl Worker
@@ -325,6 +397,7 @@ impl Worker
 			shared,
 			pending: HashMap::new(),
 			registry: HashMap::new(),
+			global: Vec::new(),
 		};
 		worker.register(modules);
 		for module in worker.registry.values().filter_map(Weak::upgrade)
@@ -341,10 +414,18 @@ impl Worker
 	fn register(&mut self, modules: Vec<WeakModule>)
 	{
 		self.registry.retain(|_, module| module.strong_count() > 0);
+		self.global.clear();
 		for module in modules
 		{
-			self.registry
-				.insert(module.as_ptr() as *const () as usize, module);
+			let identity = module.as_ptr() as *const () as usize;
+			if !self
+				.global
+				.iter()
+				.any(|known| known.as_ptr() as *const () as usize == identity)
+			{
+				self.global.push(module.clone());
+			}
+			self.registry.insert(identity, module);
 		}
 	}
 
@@ -361,13 +442,16 @@ impl Worker
 	{
 		if !matches!(catch_unwind(AssertUnwindSafe(callback)), Ok(Ok(())))
 		{
-			self.shared.moduleErrors.fetch_add(1, Ordering::Relaxed);
+			self.shared
+				.worker
+				.moduleErrors
+				.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 
 	fn result(&self) -> ControlResult
 	{
-		if self.shared.moduleErrors.load(Ordering::Relaxed) > 0
+		if self.shared.worker.moduleErrors.load(Ordering::Relaxed) > 0
 		{
 			Err(ControlError::ModuleFailed)
 		}
@@ -396,9 +480,13 @@ impl Worker
 		{
 			match command
 			{
-				Command::Trace(trace) =>
+				Command::Trace(mut trace, backtrace) =>
 				{
-					self.shared.queued.fetch_sub(1, Ordering::Relaxed);
+					self.shared.worker.dequeued.fetch_add(1, Ordering::Relaxed);
+					if let Some(backtrace) = backtrace
+					{
+						trace.backtraces = HTracer::backtrace_resolve(backtrace);
+					}
 					for module in trace.context.modules_get().values().flatten()
 					{
 						self.remember(module);
@@ -407,7 +495,7 @@ impl Worker
 							Ok(())
 						});
 					}
-					self.shared.processed.fetch_add(1, Ordering::Relaxed);
+					self.shared.worker.processed.fetch_add(1, Ordering::Relaxed);
 					self.callback(|| {
 						drop(trace);
 						Ok(())
@@ -437,7 +525,12 @@ impl Worker
 				Command::Shutdown =>
 				{
 					self.flush();
-					for module in self.registry.values().filter_map(Weak::upgrade)
+					// Only the current global configuration exits here: a replaced
+					// one already received its context exit, whichever thread caches
+					// still keep its modules alive.
+					for module in std::mem::take(&mut self.global)
+						.iter()
+						.filter_map(Weak::upgrade)
 					{
 						self.callback(|| {
 							module.event_onGlobalExit();
@@ -574,7 +667,7 @@ mod tests
 			message: message.into(),
 			date: OffsetDateTime::now_utc(),
 			level: Level::NORMAL,
-			context: context.clone(),
+			context: Arc::new(context.clone()),
 			filename: "producer.rs".into(),
 			fileline: 42,
 			backtraces: vec![],
@@ -615,7 +708,7 @@ mod tests
 			onTrace: Some(Box::new(move |_| traceEvents.lock().push("trace"))),
 			..Default::default()
 		});
-		assert!(runtime.send_trace(trace(&context, "first")));
+		assert!(runtime.send_trace(trace(&context, "first"), None));
 		runtime.shutdown(WAIT).unwrap();
 		assert_eq!(*events.lock(), ["startup", "trace"]);
 	}
@@ -679,8 +772,8 @@ mod tests
 		let mut context = Context::default();
 		context.module_add_arc("initial", initial);
 		context.module_add_arc("late", late);
-		assert!(runtime.send_trace(trace(&context, "later")));
-		runtime.context_exit(context);
+		assert!(runtime.send_trace(trace(&context, "later"), None));
+		runtime.context_exit(Arc::new(context));
 		runtime.flush(WAIT).unwrap();
 		runtime.shutdown(WAIT).unwrap();
 		assert_eq!(initialStarts.load(Ordering::Relaxed), 1);
@@ -736,7 +829,7 @@ mod tests
 		assert_eq!(runtime.flush(WAIT), Err(ControlError::ModuleFailed));
 		assert_eq!(runtime.stats().moduleErrors, 2);
 		assert_eq!(healthyStarts.load(Ordering::Relaxed), 1);
-		assert!(runtime.send_trace(trace(&context, "after startup failures")));
+		assert!(runtime.send_trace(trace(&context, "after startup failures"), None));
 		assert_eq!(runtime.shutdown(WAIT), Err(ControlError::ModuleFailed));
 		assert_eq!(processed.load(Ordering::Relaxed), 1);
 		assert_eq!(runtime.stats().processed, 1);
@@ -749,8 +842,8 @@ mod tests
 	{
 		let runtime = Runtime::default();
 		assert!(!runtime.is_accepting());
-		assert!(!runtime.send_trace(trace(&Context::default(), "early")));
-		assert!(!runtime.admission.lock().started);
+		assert!(!runtime.send_trace(trace(&Context::default(), "early"), None));
+		assert!(!runtime.admission.read().started);
 		assert_eq!(runtime.flush(WAIT), Err(ControlError::NotInitialized));
 		assert_eq!(runtime.shutdown(WAIT), Ok(()));
 		assert_eq!(runtime.shutdown(WAIT), Ok(()));
@@ -780,8 +873,8 @@ mod tests
 		first.date = OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(2);
 		let mut second = trace(&context, "second");
 		second.date = OffsetDateTime::UNIX_EPOCH;
-		assert!(runtime.send_trace(first));
-		assert!(runtime.send_trace(second));
+		assert!(runtime.send_trace(first, None));
+		assert!(runtime.send_trace(second, None));
 		context.extra_set("source", "changed");
 		runtime.shutdown(WAIT).unwrap();
 		let first = receiver.recv_timeout(WAIT).unwrap();
@@ -810,16 +903,16 @@ mod tests
 		let producerRuntime = runtime.clone();
 		let producerContext = context.clone();
 		let first = thread::spawn(move || {
-			assert!(producerRuntime.send_trace(trace(&producerContext, "a1")));
+			assert!(producerRuntime.send_trace(trace(&producerContext, "a1"), None));
 			firstDone.send(()).unwrap();
 			secondReceived.recv_timeout(WAIT).unwrap();
-			assert!(producerRuntime.send_trace(trace(&producerContext, "a2")));
+			assert!(producerRuntime.send_trace(trace(&producerContext, "a2"), None));
 		});
 		let producerRuntime = runtime.clone();
 		let producerContext = context.clone();
 		let second = thread::spawn(move || {
 			firstReceived.recv_timeout(WAIT).unwrap();
-			assert!(producerRuntime.send_trace(trace(&producerContext, "b1")));
+			assert!(producerRuntime.send_trace(trace(&producerContext, "b1"), None));
 			secondDone.send(()).unwrap();
 		});
 		first.join().unwrap();
@@ -849,7 +942,10 @@ mod tests
 					barrier.wait();
 					for index in 0..128
 					{
-						assert!(runtime.send_trace(trace(&context, format!("{producer}:{index}"))));
+						assert!(
+							runtime
+								.send_trace(trace(&context, format!("{producer}:{index}")), None)
+						);
 					}
 				})
 			})
@@ -905,13 +1001,13 @@ mod tests
 			})),
 			..Default::default()
 		});
-		assert!(runtime.send_trace(trace(&context, "before")));
+		assert!(runtime.send_trace(trace(&context, "before"), None));
 		let flushing = runtime.clone();
 		let (done, completed) = mpsc::channel();
 		let control = thread::spawn(move || done.send(flushing.flush(WAIT)).unwrap());
 		flushObserved.recv_timeout(WAIT).unwrap();
 		assert_eq!(runtime.stats().processed, 1);
-		assert!(runtime.send_trace(trace(&context, "after")));
+		assert!(runtime.send_trace(trace(&context, "after"), None));
 		flushRelease.send(()).unwrap();
 		laterObserved.recv_timeout(WAIT).unwrap();
 		assert_eq!(completed.recv_timeout(WAIT).unwrap(), Ok(()));
@@ -946,12 +1042,12 @@ mod tests
 				let barrier = barrier.clone();
 				let ready = ready.clone();
 				thread::spawn(move || {
-					assert!(runtime.send_trace(trace(&context, format!("{producer}:first"))));
+					assert!(runtime.send_trace(trace(&context, format!("{producer}:first")), None));
 					ready.send(()).unwrap();
 					barrier.wait();
 					(0..200)
 						.filter(|index| {
-							runtime.send_trace(trace(&context, format!("{producer}:{index}")))
+							runtime.send_trace(trace(&context, format!("{producer}:{index}")), None)
 						})
 						.count()
 						+ 1
@@ -972,7 +1068,7 @@ mod tests
 			.map(|producer| producer.join().unwrap())
 			.sum();
 		assert_eq!(runtime.shutdown(WAIT), Ok(()));
-		assert!(!runtime.send_trace(trace(&context, "late")));
+		assert!(!runtime.send_trace(trace(&context, "late"), None));
 		assert_eq!(successes as u64, runtime.stats().accepted);
 		assert_eq!(runtime.stats().accepted, runtime.stats().processed);
 		assert_eq!(received.load(Ordering::Relaxed), successes);
@@ -999,8 +1095,8 @@ mod tests
 				..Default::default()
 			},
 		);
-		assert!(runtime.send_trace(trace(&context, "first")));
-		assert!(runtime.send_trace(trace(&context, "second")));
+		assert!(runtime.send_trace(trace(&context, "first"), None));
+		assert!(runtime.send_trace(trace(&context, "second"), None));
 		assert_eq!(runtime.flush(WAIT), Err(ControlError::ModuleFailed));
 		assert_eq!(received.load(Ordering::Relaxed), 2);
 		assert_eq!(runtime.stats().processed, 2);
@@ -1022,7 +1118,7 @@ mod tests
 			})),
 			..Default::default()
 		});
-		assert!(runtime.send_trace(trace(&context, "blocked")));
+		assert!(runtime.send_trace(trace(&context, "blocked"), None));
 		observed.recv_timeout(WAIT).unwrap();
 		let begin = Instant::now();
 		assert_eq!(
@@ -1035,7 +1131,7 @@ mod tests
 		);
 		assert!(begin.elapsed() < Duration::from_secs(1));
 		assert!(runtime.shared.completion.lock().is_none());
-		assert!(!runtime.send_trace(trace(&context, "late")));
+		assert!(!runtime.send_trace(trace(&context, "late"), None));
 		release.send(()).unwrap();
 		assert_eq!(runtime.shutdown(WAIT), Ok(()));
 		assert_eq!(runtime.stats().processed, 1);
@@ -1046,7 +1142,7 @@ mod tests
 	fn control_deadline_includes_admission_lock()
 	{
 		let (runtime, _) = configured(TestModule::default());
-		let admission = runtime.admission.lock();
+		let admission = runtime.admission.write();
 		let controlRuntime = runtime.clone();
 		let (sent, observed) = mpsc::channel();
 		let control = thread::spawn(move || {
@@ -1079,7 +1175,7 @@ mod tests
 					sent.send((
 						runtime.flush(WAIT),
 						runtime.shutdown(WAIT),
-						runtime.send_trace(trace(&Context::default(), "recursive")),
+						runtime.send_trace(trace(&Context::default(), "recursive"), None),
 					))
 					.unwrap();
 				})),
@@ -1087,7 +1183,7 @@ mod tests
 			},
 		);
 		runtime.start(vec![]).unwrap();
-		assert!(runtime.send_trace(trace(&context, "outer")));
+		assert!(runtime.send_trace(trace(&context, "outer"), None));
 		assert_eq!(
 			observed.recv_timeout(WAIT).unwrap(),
 			(
@@ -1120,7 +1216,7 @@ mod tests
 			}))),
 			..Default::default()
 		});
-		assert!(runtime.send_trace(trace(&context, "temporary")));
+		assert!(runtime.send_trace(trace(&context, "temporary"), None));
 		drop(context);
 		runtime.flush(WAIT).unwrap();
 		assert_eq!(observed.recv_timeout(WAIT).unwrap(), "flush");
@@ -1130,6 +1226,32 @@ mod tests
 			observed.try_recv().is_err(),
 			"weak registry must not retain dead modules"
 		);
+	}
+
+	#[test]
+	fn global_exit_targets_only_the_current_global_modules()
+	{
+		let exits = Arc::new(Mutex::new(Vec::new()));
+		let module = |name: &'static str| -> Module {
+			let output = exits.clone();
+			Arc::new(TestModule {
+				onGlobalExit: Some(Box::new(move || output.lock().push(name))),
+				..Default::default()
+			})
+		};
+		let replaced = module("replaced");
+		let current = module("current");
+		let runtime = Runtime::default();
+		runtime
+			.start(vec![Arc::downgrade(&replaced), Arc::downgrade(&replaced)])
+			.unwrap();
+		// The replaced module stays alive (as an idle thread cache would keep it).
+		runtime
+			.start(vec![Arc::downgrade(&current), Arc::downgrade(&current)])
+			.unwrap();
+		runtime.shutdown(WAIT).unwrap();
+		assert_eq!(*exits.lock(), ["current"]);
+		drop((replaced, current));
 	}
 
 	#[test]
@@ -1149,7 +1271,7 @@ mod tests
 			})),
 			..Default::default()
 		});
-		runtime.context_exit(context);
+		runtime.context_exit(Arc::new(context));
 		runtime.flush(WAIT).unwrap();
 		assert_eq!(exits.load(Ordering::Relaxed), 1);
 		assert_eq!(flushes.load(Ordering::Relaxed), 1);
@@ -1161,7 +1283,7 @@ mod tests
 	{
 		let runtime = Arc::new(Runtime::default());
 		let (sender, receiver) = mpsc::channel();
-		runtime.admission.lock().sender = Some(sender);
+		runtime.admission.write().sender = Some(sender);
 		drop(receiver);
 		let weak = Arc::downgrade(&runtime);
 		let (sent, observed) = mpsc::channel();
@@ -1171,14 +1293,14 @@ mod tests
 			TestModule {
 				onDrop: Some(DropCallback(Box::new(move || {
 					let runtime = weak.upgrade().unwrap();
-					sent.send(runtime.admission.try_lock().is_some()).unwrap();
+					sent.send(runtime.admission.try_write().is_some()).unwrap();
 				}))),
 				..Default::default()
 			},
 		);
 		let payload = trace(&context, "lost");
 		drop(context);
-		assert!(!runtime.send_trace(payload));
+		assert!(!runtime.send_trace(payload, None));
 		assert!(observed.recv_timeout(WAIT).unwrap());
 		assert_eq!(runtime.stats().rejected, 1);
 		assert_eq!(runtime.stats().queued, 0);

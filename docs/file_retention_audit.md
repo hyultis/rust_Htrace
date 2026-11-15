@@ -23,11 +23,12 @@ Windows runtime behavior still requires native validation.
 | --- | --- |
 | Construction | Relative paths become absolute once, so a later working-directory change cannot redirect purge. Preserve the absolute spelling, including trailing separators. |
 | Root validation | Reject observed symlinks/reparse points, non-directories, pathname roots (such as `/` or a drive/share root), and raw/stripped spellings that canonicalize differently. |
+| Root anchoring | Each pass (startup or periodic) validates the root and records its canonical path and identity at its start. A directory deleted and recreated between passes is accepted as a new directory; during a pass the anchor never changes. |
 | Enumeration | Enumerate the saved canonical root only; never recurse and never enumerate `forceInOneFile` or source/thread-derived destinations. |
-| Candidate selection | Require exact `.trc`, exactly one normal component, and raw basename equality. Reject absolute paths, prefixes, `..`, nested and normalized separator/dot spellings. |
+| Candidate selection | Require exact `.trc`, exactly one normal component, and raw basename equality, without filesystem calls. Reject absolute paths, prefixes, `..`, nested and normalized separator/dot spellings. |
 | Candidate resolution | Join the basename to the saved canonical root; require the expected direct parent and exact canonical equality. Check regular-file type without following the final link; reject Windows reparse points. |
-| Cache and age | Coordinate closing cached handles and deletion under the same writer mutex. Recheck type, identity hints, size, mtime and age; protect current destinations. |
-| Removal | Recheck the root, then call `remove_file` on the canonical candidate. This last pair is **not atomic**. |
+| Cache and age | Protect current destinations (canonicalized at most once per batch, only when a candidate reaches this test). Once a candidate passes its checks, verify the root against the anchor before closing cached handles. Coordinate closing cached handles and deletion under the same writer mutex. Recheck type, identity hints, size, mtime and age. |
+| Removal | Recheck the root, then call `remove_file` on the canonical candidate. This last pair is **not atomic**. A failed root check deletes nothing and ends the pass; any other entry error also rechecks the root and ends the pass if it changed. |
 
 Conditional argument: in a stable namespace, a validated basename cannot add a
 parent step, absolute root or extra component. Joining it to the canonical root
@@ -67,8 +68,9 @@ The audit suite includes malformed direct calls, absolute/parent/multiple
 components, similarly prefixed sibling directories, nested `.trc` directories,
 native names and exact extensions, literal percent-encoded separators, external
 file/directory links, root links with slash/dot suffixes, hard links, external
-`forceInOneFile` destinations, root/ancestor replacement before the final check,
-and working-directory changes isolated in a child process. External fixture
+`forceInOneFile` destinations, root/ancestor replacement before the final check
+(including replacement after enumeration began), a directory recreated between
+passes, and working-directory changes isolated in a child process. External fixture
 sentinels are checked for both existence and unchanged contents. Pathname-root
 refusal is tested through the read-only validator, never by purging a real root.
 

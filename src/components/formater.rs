@@ -22,7 +22,18 @@ impl FormaterCompiled
 	/// parameters is a simple array created with FormaterParamBuilder
 	pub fn render(&self, parameters: HashMap<String, String>) -> String
 	{
-		let mut rendered = String::new();
+		// Upper bound of the output (plus a trailing line break the outputs
+		// append), so rendering never reallocates.
+		let mut capacity = 1 + parameters.values().map(String::len).sum::<usize>();
+		for (previous, data) in &self.inner
+		{
+			capacity += previous.len();
+			if let Some(data) = data
+			{
+				capacity += data.prefix.len() + data.suffix.len();
+			}
+		}
+		let mut rendered = String::with_capacity(capacity);
 		for (previous, data) in &self.inner
 		{
 			rendered.push_str(previous);
@@ -124,35 +135,66 @@ pub fn FormaterCompile(formater: &String) -> FormaterCompiled
 	return FormaterCompiled { inner: compiled };
 }
 
+/// Append `value` to `output`, replacing each real line break with
+/// `replacement`, in a single pass. `\r\n` and `\n\r` pairs count as one
+/// break; literal backslash sequences (such as the two characters `\` and `n`)
+/// are kept verbatim.
+fn pushReplacingLineBreaks(output: &mut String, value: &str, replacement: &[&str])
+{
+	let mut rest = value;
+	while let Some(position) = rest.find(['\n', '\r'])
+	{
+		output.push_str(&rest[..position]);
+		replacement.iter().for_each(|part| output.push_str(part));
+		let complement = match rest.as_bytes()[position]
+		{
+			b'\n' => b'\r',
+			_ => b'\n',
+		};
+		let mut next = position + 1;
+		if rest.as_bytes().get(next) == Some(&complement)
+		{
+			next += 1;
+		}
+		rest = &rest[next..];
+	}
+	output.push_str(rest);
+}
+
+/// Keep metadata fields on one line: each line break becomes a single space.
+fn flattenLineBreaks(value: &str) -> String
+{
+	let mut flattened = String::with_capacity(value.len());
+	pushReplacingLineBreaks(&mut flattened, value, &[" "]);
+	flattened
+}
+
 /// format a string in a simple way errorless
 /// you can replace it with FormaterParamBuilderSignature (and put in inside config of module)
+/// Real line breaks in `{msg}` are followed by `lineReturn`; line breaks in
+/// `{thread}`, `{context}`, `{file}` and `{extra[*]}` are replaced by a space.
 pub fn FormaterParamBuilder(trace: &OneTrace, lineReturn: &String) -> HashMap<String, String>
 {
-	let mut msg = trace.message.clone();
-	if (msg.contains("\n") || msg.contains("\r") || msg.contains("\\n") || msg.contains("\\r"))
+	// Message and backtraces are built into a single buffer.
+	let mut msg = String::with_capacity(match trace.backtraces.is_empty()
 	{
-		let linereturn = format!("\n{}", lineReturn);
-		msg = msg.replace("\n\r", "\n");
-		msg = msg.replace("\\n\\r", "\n");
-		msg = msg.replace("\r", "\n");
-		msg = msg.replace("\\r", "\n");
-		msg = msg.replace("\\n", "\n");
-		msg = msg.replace("\n", linereturn.as_str());
-	}
+		true => trace.message.len(),
+		false => trace.message.len() + 9 + trace.backtraces.len() * (lineReturn.len() + 65),
+	});
+	pushReplacingLineBreaks(&mut msg, &trace.message, &["\n", lineReturn]);
 
 	if !trace.backtraces.is_empty()
 	{
 		use std::fmt::Write;
-		let mut drawBacktraces = String::new();
+		msg.push_str(", with : ");
 		for one in &trace.backtraces
 		{
-			let _ = write!(&mut drawBacktraces, "\n{lineReturn}{one}");
+			let _ = write!(&mut msg, "\n{lineReturn}{one}");
 		}
-
-		msg = format!("{}, with : {}", msg, drawBacktraces)
 	}
 
-	let mut parameters = HashMap::new();
+	let extras = trace.context.extra_getAll();
+	let mut parameters = HashMap::with_capacity(8 + extras.len());
 	let formatTime = format_description!("[hour repr:24]:[minute]:[second].[subsecond digits:6]");
 	parameters.insert(
 		"time".to_string(),
@@ -164,21 +206,17 @@ pub fn FormaterParamBuilder(trace: &OneTrace, lineReturn: &String) -> HashMap<St
 	parameters.insert("lvl".to_string(), trace.level.convert4LengthString());
 	parameters.insert(
 		"thread".to_string(),
-		trace
-			.context
-			.threadName_get()
-			.clone()
-			.unwrap_or("".to_string()),
+		flattenLineBreaks(trace.context.threadName_get().as_deref().unwrap_or("")),
 	);
 	parameters.insert(
 		"context".to_string(),
-		trace.context.name_get().clone().unwrap_or("".to_string()),
+		flattenLineBreaks(trace.context.name_get().as_deref().unwrap_or("")),
 	);
-	parameters.insert("file".to_string(), trace.filename.clone());
+	parameters.insert("file".to_string(), flattenLineBreaks(&trace.filename));
 	parameters.insert("line".to_string(), trace.fileline.to_string());
 
-	trace.context.extra_getAll().iter().for_each(|(key, data)| {
-		parameters.insert(format!("extra:{}", key), data.to_string());
+	extras.iter().for_each(|(key, data)| {
+		parameters.insert(format!("extra:{}", key), flattenLineBreaks(data));
 	});
 
 	parameters.insert("msg".to_string(), msg);
@@ -200,6 +238,116 @@ mod tests
 				("msg".into(), "hello".into())
 			])),
 			"a[xx]bhelloc{unknown}"
+		);
+	}
+
+	#[test]
+	fn optional_variable_renders_affixes_only_when_present()
+	{
+		let compiled = FormaterCompile(&"[{extra[test]:<(}{extra[test]:>) }{msg}]".into());
+		let mut context = crate::components::context::Context::default();
+		let absent = FormaterParamBuilder(
+			&traceWith("hello", context.clone(), "file.rs"),
+			&" | ".to_string(),
+		);
+		assert_eq!(compiled.render(absent), "[hello]");
+		context.extra_set("test", "");
+		let empty = FormaterParamBuilder(
+			&traceWith("hello", context.clone(), "file.rs"),
+			&" | ".to_string(),
+		);
+		assert_eq!(compiled.render(empty), "[hello]");
+		context.extra_set("test", "x");
+		let present =
+			FormaterParamBuilder(&traceWith("hello", context, "file.rs"), &" | ".to_string());
+		assert_eq!(compiled.render(present), "[(xx) hello]");
+	}
+
+	#[test]
+	fn backtraces_follow_the_message_unchanged()
+	{
+		let mut trace = traceWith("a\nb", Default::default(), "file.rs");
+		trace.backtraces = vec![
+			crate::components::hbacktrace::Hbacktrace {
+				funcName: "app::run".into(),
+				fileName: Some("src/app.rs".into()),
+				line: Some(3),
+			},
+			crate::components::hbacktrace::Hbacktrace {
+				funcName: "main".into(),
+				fileName: None,
+				line: None,
+			},
+		];
+		let parameters = FormaterParamBuilder(&trace, &" | ".to_string());
+		assert_eq!(
+			parameters.get("msg").map(String::as_str),
+			Some("a\n | b, with : \n | src/app.rs(3): app::run\n | - main")
+		);
+	}
+
+	fn traceWith(
+		message: &str,
+		context: crate::components::context::Context,
+		filename: &str,
+	) -> OneTrace
+	{
+		OneTrace {
+			message: message.to_string(),
+			date: time::macros::datetime!(2026-01-01 00:00 UTC),
+			level: crate::components::level::Level::NORMAL,
+			context: std::sync::Arc::new(context),
+			filename: filename.to_string().into(),
+			fileline: 1,
+			backtraces: Vec::new(),
+		}
+	}
+
+	fn renderedMessage(message: &str) -> String
+	{
+		let parameters = FormaterParamBuilder(
+			&traceWith(message, Default::default(), "file.rs"),
+			&" | ".to_string(),
+		);
+		parameters.get("msg").cloned().unwrap_or_default()
+	}
+
+	#[test]
+	fn literal_backslash_sequences_are_kept_verbatim()
+	{
+		for message in [r"C:\new\rapport", r"a\nb\rc\n\rd"]
+		{
+			assert_eq!(renderedMessage(message), message);
+		}
+	}
+
+	#[test]
+	fn real_line_breaks_produce_one_continuation_each()
+	{
+		for message in ["a\nb", "a\rb", "a\r\nb", "a\n\rb"]
+		{
+			assert_eq!(renderedMessage(message), "a\n | b", "{message:?}");
+		}
+		assert_eq!(renderedMessage("a\n\nb"), "a\n | \n | b");
+		assert_eq!(renderedMessage("a\r\n\r\nb"), "a\n | \n | b");
+		assert_eq!(renderedMessage("a\n\r\nb"), "a\n | \n | b");
+	}
+
+	#[test]
+	fn metadata_line_breaks_are_flattened_to_spaces()
+	{
+		let mut context = crate::components::context::Context::default();
+		context.threadName_set("thread\none");
+		context.name_set("context\r\nname");
+		context.extra_set("key", "first\n\rsecond\rthird");
+		let parameters = FormaterParamBuilder(
+			&traceWith("msg\nnext", context, "dir\nfile.rs"),
+			&" | ".to_string(),
+		);
+		let compiled = FormaterCompile(&"{thread}|{context}|{file}|{extra[key]}|{msg}".into());
+		assert_eq!(
+			compiled.render(parameters),
+			"thread one|context name|dir file.rs|first second third|msg\n | next"
 		);
 	}
 }

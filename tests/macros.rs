@@ -65,11 +65,12 @@ fn lazy_macros_borrow_results_and_evaluate_arguments_once()
 	context.module_add("capture", Capture(messages.clone()));
 	context.level_setMin(Some(Level::FATAL));
 	#[cfg(any(feature = "log_consumer", feature = "tracing_consumer"))]
-	HTracer::globalContext_set(context, htrace::crates::bridge::HtraceBridge::default());
+	HTracer::globalContext_set(context, htrace::crates::bridge::HtraceBridge::default()).unwrap();
 	#[cfg(not(any(feature = "log_consumer", feature = "tracing_consumer")))]
-	HTracer::globalContext_set(context);
+	HTracer::globalContext_set(context).unwrap();
 
 	let before = HTracer::stats().backtraces;
+	let rejected = HTracer::stats().rejected;
 	let levels = Cell::new(0);
 	HTrace!(({ levels.set(levels.get() + 1); Level::ERROR }) "{}", {
 		calls.set(calls.get() + 1); "filtered"
@@ -95,6 +96,9 @@ fn lazy_macros_borrow_results_and_evaluate_arguments_once()
 	HTraceError!(okResult);
 	assert_eq!(okResult, Ok("still owned".to_owned()));
 	assert_eq!(HTracer::stats().backtraces, before);
+	// A trace filtered by level is ignored, not rejected.
+	HTracer::trace(&"filtered", Level::ERROR, file!(), line!(), None);
+	assert_eq!(HTracer::stats().rejected, rejected);
 
 	{
 		let mut context = Context::default();
@@ -114,8 +118,8 @@ fn lazy_macros_borrow_results_and_evaluate_arguments_once()
 		let owned = String::from("borrowed");
 		let display = DisplayOnly(&owned);
 		HTrace!("display = {}", display);
-		HTracer::trace_display(&display, Level::NORMAL, file!(), line!(), vec![]);
-		HTracer::trace_debug(&owned.as_str(), Level::NORMAL, file!(), line!(), vec![]);
+		HTracer::trace_display(&display, Level::NORMAL, file!(), line!(), None);
+		HTracer::trace_debug(&owned.as_str(), Level::NORMAL, file!(), line!(), None);
 		let result: Result<(), DisplayOnly<'_>> = Err(display);
 		HTraceError!((Level::NORMAL) "error = {}", result);
 		assert!(result.is_err());
@@ -153,7 +157,7 @@ fn lazy_macros_borrow_results_and_evaluate_arguments_once()
 		"after shutdown"
 	});
 	assert_eq!(calls.get(), 1);
-	HTracer::trace(&"rejected", Level::NORMAL, file!(), line!(), vec![]);
+	HTracer::trace(&"rejected", Level::FATAL, file!(), line!(), None);
 	assert!(HTracer::stats().rejected >= 1);
 	HTracer::shutdown().unwrap();
 }

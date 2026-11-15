@@ -59,7 +59,7 @@ fn bridge_filters_precede_formatting_and_follow_local_thresholds()
 		min_level_backtrace: None,
 		..HtraceBridge::default()
 	};
-	HTracer::globalContext_set(context, bridge);
+	HTracer::globalContext_set(context, bridge).unwrap();
 	let formats = AtomicUsize::new(0);
 	#[cfg(feature = "log_consumer")]
 	log::debug!("{:?}", FormatCount(&formats));

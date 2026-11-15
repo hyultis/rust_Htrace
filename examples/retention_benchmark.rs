@@ -20,9 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 	fn install(context: Context)
 	{
 		#[cfg(not(any(feature = "tracing_consumer", feature = "log_consumer")))]
-		HTracer::globalContext_set(context);
+		HTracer::globalContext_set(context).expect("Htrace configuration failed");
 		#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-		HTracer::globalContext_set(context, HtraceBridge::default());
+		HTracer::globalContext_set(context, HtraceBridge::default())
+			.expect("Htrace configuration failed");
 	}
 
 	let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -57,7 +58,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 		purgeAfterDays: (mode == "age").then_some(1),
 		purgeOnStartup: mode == "startup",
 		..FileConfig::default()
-	}));
+	})?);
 	let mut context = Context::default();
 	context.module_add_arc("file", files.clone());
 	let startup = Instant::now();
@@ -74,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>
 			Level::NORMAL,
 			file!(),
 			line!(),
-			Vec::new(),
+			None,
 		);
 		samples.push(call.elapsed().as_nanos());
 	}

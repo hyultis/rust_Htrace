@@ -11,11 +11,12 @@ use htrace::modules::file::File;
 use htrace::modules::file_config::FileConfig;
 use htrace::modules::module_abstract::ModuleAbstract;
 use htrace::{HTrace, Spaned};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use time::OffsetDateTime;
-use time::macros::datetime;
+use time::macros::{datetime, format_description};
 
 fn config(path: &Path) -> FileConfig
 {
@@ -34,11 +35,46 @@ fn trace(message: &str, date: OffsetDateTime) -> OneTrace
 		message: message.to_string(),
 		date,
 		level: Level::NORMAL,
-		context: Context::default(),
-		filename: "some/directory/source.rs".to_string(),
+		context: Arc::new(Context::default()),
+		filename: "some/directory/source.rs".into(),
 		fileline: 1,
 		backtraces: Vec::new(),
 	}
+}
+
+/// Current UTC day, as used in daily file names.
+fn utcDay() -> String
+{
+	OffsetDateTime::now_utc()
+		.format(format_description!("[year][month][day]"))
+		.unwrap()
+}
+
+/// Sorted lines of every `<producer>_<day>.trc` file in `path`, grouped by
+/// producer. Each file must be dated with one of `days`, so traces written
+/// across midnight may be split between two files of the same producer.
+fn filesByProducer(path: &Path, days: &[&str]) -> BTreeMap<String, Vec<String>>
+{
+	let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+	for entry in std::fs::read_dir(path).unwrap()
+	{
+		let entry = entry.unwrap();
+		let name = entry.file_name().to_string_lossy().into_owned();
+		let producer = days
+			.iter()
+			.find_map(|day| name.strip_suffix(&format!("_{day}.trc")))
+			.unwrap_or_else(|| panic!("unexpected file name {name:?}, expected days {days:?}"));
+		let contents = std::fs::read_to_string(entry.path()).unwrap();
+		groups
+			.entry(producer.to_string())
+			.or_default()
+			.extend(contents.lines().map(str::to_string));
+	}
+	for lines in groups.values_mut()
+	{
+		lines.sort();
+	}
+	groups
 }
 
 #[test]
@@ -48,7 +84,7 @@ fn append_across_processes()
 	const MESSAGE: &str = "HTRACE_TEST_APPEND_MESSAGE";
 	if let Some(directory) = std::env::var_os(DIRECTORY)
 	{
-		let output = File::new(config(Path::new(&directory)));
+		let output = File::new(config(Path::new(&directory))).unwrap();
 		let message = std::env::var(MESSAGE).unwrap();
 		output.event_onNormal(&trace(&message, datetime!(2026-01-01 00:00 UTC)));
 		output.flush().unwrap();
@@ -105,7 +141,7 @@ fn file_output()
 	rotatedConfig.bySrc = true;
 	rotatedConfig.byThreadId = true;
 	rotatedConfig.byHour = true;
-	let rotated = File::new(rotatedConfig);
+	let rotated = File::new(rotatedConfig).unwrap();
 	for (message, date) in [
 		("first", datetime!(2026-01-01 23:59 UTC)),
 		("second", datetime!(2026-01-02 00:01 UTC)),
@@ -129,7 +165,7 @@ fn file_output()
 	rotated.flush().unwrap();
 
 	let dayPath = root.join("day");
-	let daily = File::new(config(&dayPath));
+	let daily = File::new(config(&dayPath)).unwrap();
 	daily.event_onNormal(&trace("daily", datetime!(2026-01-02 12:34 UTC)));
 	assert_eq!(
 		std::fs::read_to_string(dayPath.join("all_20260102.trc")).unwrap(),
@@ -140,7 +176,7 @@ fn file_output()
 	let disabledPath = root.join("disabled");
 	let mut disabledConfig = config(&disabledPath);
 	disabledConfig.forceInOneFile = None;
-	let disabled = File::new(disabledConfig);
+	let disabled = File::new(disabledConfig).unwrap();
 	disabled.event_onNormal(&trace("disabled", datetime!(2026-01-01 00:00 UTC)));
 	assert!(!disabledPath.exists());
 	assert_eq!(disabled.stats(), Default::default());
@@ -148,14 +184,14 @@ fn file_output()
 	// Reproducible failures without chmod or privilege assumptions.
 	let parentFile = root.join("parent-is-file");
 	std::fs::write(&parentFile, "keep me").unwrap();
-	let createFailure = File::new(config(&parentFile.join("nested")));
+	let createFailure = File::new(config(&parentFile.join("nested"))).unwrap();
 	createFailure.event_onNormal(&trace("fail", datetime!(2026-01-01 00:00 UTC)));
 	assert_eq!(createFailure.stats().createErrors, 1);
 	assert_eq!(createFailure.stats().openErrors, 0);
 	assert_eq!(std::fs::read_to_string(&parentFile).unwrap(), "keep me");
 	let openPath = root.join("open-failure");
 	std::fs::create_dir_all(openPath.join("all_20260101.trc")).unwrap();
-	let openFailure = File::new(config(&openPath));
+	let openFailure = File::new(config(&openPath)).unwrap();
 	openFailure.event_onNormal(&trace("fail", datetime!(2026-01-01 00:00 UTC)));
 	assert_eq!(openFailure.stats().openErrors, 1);
 	assert_eq!(openFailure.stats().createErrors, 0);
@@ -163,7 +199,7 @@ fn file_output()
 
 	// Distinct dates force LRU eviction. Reopening an evicted file appends.
 	let boundedPath = root.join("bounded");
-	let bounded = File::new(config(&boundedPath));
+	let bounded = File::new(config(&boundedPath)).unwrap();
 	for day in 1..=24
 	{
 		let date = datetime!(2026-01-01 00:00 UTC) + time::Duration::days(day - 1);
@@ -181,7 +217,7 @@ fn file_output()
 
 	// Direct calls are serialized per complete line, independently of the worker.
 	let concurrentPath = root.join("concurrent");
-	let concurrent = Arc::new(File::new(config(&concurrentPath)));
+	let concurrent = Arc::new(File::new(config(&concurrentPath)).unwrap());
 	let barrier = Arc::new(Barrier::new(5));
 	let mut workers = Vec::new();
 	for producer in 0..4
@@ -221,13 +257,16 @@ fn file_output()
 	let mut producerConfig = config(&producerPath);
 	producerConfig.forceInOneFile = None;
 	producerConfig.byThreadId = true;
-	let producerFiles = Arc::new(File::new(producerConfig));
+	let producerFiles = Arc::new(File::new(producerConfig).unwrap());
 	let mut context = Context::default();
 	context.module_add_arc("files", producerFiles.clone());
 	#[cfg(not(any(feature = "tracing_consumer", feature = "log_consumer")))]
-	HTracer::globalContext_set(context);
+	HTracer::globalContext_set(context).unwrap();
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(context, HtraceBridge::default());
+	HTracer::globalContext_set(context, HtraceBridge::default()).unwrap();
+	// Traces are dated when emitted: the day may change while they are written.
+	let dayBefore = utcDay();
+	// Producer names come from span contexts and are sanitized for filenames.
 	for name in [
 		"producer-one",
 		"producer-two",
@@ -239,23 +278,31 @@ fn file_output()
 		"Équipe 東京 (1)",
 	]
 	{
-		std::thread::Builder::new()
-			.name(name.to_string())
-			.spawn(move || {
-				HTrace!("producer payload");
+		std::thread::spawn(move || {
+			let mut context = Context::default();
+			context.threadName_set(name);
+			Spaned!(context);
+			HTrace!("producer payload");
+		})
+		.join()
+		.unwrap();
+	}
+	// Native thread names are never used: named and unnamed producers share
+	// MAIN, without exposing their numeric ThreadId.
+	for name in [None, None, Some("Async Compute Task Pool (1)")]
+	{
+		let builder = match name
+		{
+			Some(name) => std::thread::Builder::new().name(name.to_string()),
+			None => std::thread::Builder::new(),
+		};
+		builder
+			.spawn(|| {
+				HTrace!("native payload");
 			})
 			.unwrap()
 			.join()
 			.unwrap();
-	}
-	// Unnamed producers share MAIN, without exposing their numeric ThreadId.
-	for _ in 0..2
-	{
-		std::thread::spawn(|| {
-			HTrace!("unnamed payload");
-		})
-		.join()
-		.unwrap();
 	}
 	// Taskpool workers can group their files through an explicit span name.
 	let barrier = Arc::new(Barrier::new(2));
@@ -281,67 +328,35 @@ fn file_output()
 		worker.join().unwrap();
 	}
 	HTracer::flush_timeout(Duration::from_secs(5)).unwrap();
-	assert_eq!(producerFiles.stats().linesWritten, 12);
-	for prefix in [
-		"producer-one_",
-		"producer-two_",
-		"___escape_name_",
-		"_2E_2E_",
-		"Async Compute Task Pool (0)_",
-		"Async_20Compute_20Task_20Pool_20_280_29_",
-		"Équipe 東京 (1)_",
+	let dayAfter = utcDay();
+	assert_eq!(producerFiles.stats().linesWritten, 13);
+	let groups = filesByProducer(&producerPath, &[&dayBefore, &dayAfter]);
+	let mut expected = BTreeMap::new();
+	for producer in [
+		"producer-one",
+		"producer-two",
+		"___escape_name",
+		"Async Compute Task Pool (0)",
+		"Async_20Compute_20Task_20Pool_20_280_29",
+		"Équipe 東京 (1)",
 	]
 	{
-		let entries = std::fs::read_dir(&producerPath)
-			.unwrap()
-			.map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-			.collect::<Vec<_>>();
-		let filename = entries
-			.iter()
-			.find(|name| name.starts_with(prefix))
-			.unwrap();
-		assert_eq!(
-			std::fs::read_to_string(producerPath.join(filename)).unwrap(),
-			if prefix == "_2E_2E_"
-			{
-				"producer payload\nproducer payload\n"
-			}
-			else
-			{
-				"producer payload\n"
-			}
-		);
+		expected.insert(producer.to_string(), vec!["producer payload".to_string()]);
 	}
-	let mainFile = std::fs::read_dir(&producerPath)
-		.unwrap()
-		.map(|entry| entry.unwrap().path())
-		.find(|path| {
-			path.file_name()
-				.unwrap()
-				.to_string_lossy()
-				.starts_with("MAIN_")
-		})
-		.unwrap();
-	assert_eq!(
-		std::fs::read_to_string(mainFile).unwrap(),
-		"unnamed payload\nunnamed payload\n"
+	expected.insert(
+		"_2E_2E".to_string(),
+		vec!["producer payload".to_string(); 2],
 	);
-	let groupedFiles = std::fs::read_dir(&producerPath)
-		.unwrap()
-		.map(|entry| entry.unwrap().path())
-		.filter(|path| {
-			path.file_name()
-				.unwrap()
-				.to_string_lossy()
-				.starts_with("taskpool-group_")
-		})
-		.collect::<Vec<_>>();
-	assert_eq!(groupedFiles.len(), 1);
-	let groupedContents = std::fs::read_to_string(&groupedFiles[0]).unwrap();
-	let mut groupedLines = groupedContents.lines().collect::<Vec<_>>();
-	groupedLines.sort();
-	assert_eq!(groupedLines, vec!["grouped payload 1", "grouped payload 2"]);
-	assert_eq!(std::fs::read_dir(&producerPath).unwrap().count(), 9);
+	// Producers without a span name are MAIN, whatever their native name.
+	expected.insert("MAIN".to_string(), vec!["native payload".to_string(); 3]);
+	expected.insert(
+		"taskpool-group".to_string(),
+		vec![
+			"grouped payload 1".to_string(),
+			"grouped payload 2".to_string(),
+		],
+	);
+	assert_eq!(groups, expected);
 	HTracer::shutdown_timeout(Duration::from_secs(5)).unwrap();
 	assert_eq!(producerFiles.stats().flushErrors, 0);
 
@@ -357,4 +372,55 @@ fn file_output()
 		producerFiles,
 	));
 	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shared_destination_is_written_once()
+{
+	let root = std::env::temp_dir().join(format!(
+		"htrace-dedup-tests-{}-{}",
+		std::process::id(),
+		SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos()
+	));
+	// forceInOneFile, bySrc and byThreadId all resolve to MAIN_20260101.trc.
+	let mut sharedConfig = config(&root);
+	sharedConfig.forceInOneFile = Some("MAIN".to_string());
+	sharedConfig.bySrc = true;
+	sharedConfig.byThreadId = true;
+	let shared = File::new(sharedConfig).unwrap();
+	let mut duplicated = trace("dup", datetime!(2026-01-01 00:00 UTC));
+	duplicated.filename = "some/directory/MAIN.rs".into();
+	shared.event_onNormal(&duplicated);
+	shared.flush().unwrap();
+	assert_eq!(
+		std::fs::read_to_string(root.join("MAIN_20260101.trc")).unwrap(),
+		"dup\n"
+	);
+	assert_eq!(shared.stats().linesWritten, 1);
+	assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+	drop(shared);
+	std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn empty_path_is_rejected()
+{
+	for path in ["", "   ", "\t\n"]
+	{
+		let rejected = File::new(FileConfig {
+			path: path.to_string(),
+			..FileConfig::default()
+		});
+		assert!(
+			matches!(rejected, Err(htrace::Errors::EmptyPath)),
+			"{path:?} must be rejected"
+		);
+	}
+	let valid = std::env::temp_dir().join(format!("htrace-valid-path-{}", std::process::id()));
+	assert!(File::new(config(&valid)).is_ok());
+	// Construction alone performs no filesystem operation.
+	assert!(!valid.exists());
 }

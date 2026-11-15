@@ -1,3 +1,4 @@
+use crate::Errors;
 use crate::components::context::Context;
 use crate::components::formater::FormaterCompiled;
 use crate::components::trace::OneTrace;
@@ -6,10 +7,11 @@ use crate::modules::module_abstract::ModuleAbstract;
 use crate::thread_manager::MAIN_THREAD;
 use anyhow::Result;
 use parking_lot::Mutex;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fs::{File as OutputFile, OpenOptions, create_dir_all};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use time::macros::format_description;
 
@@ -17,6 +19,8 @@ mod retention;
 use retention::Retention;
 
 const FILE_CACHE_LIMIT: usize = 16;
+/// Destination sets cached for the current date key before the cache is reset.
+const PATH_CACHE_LIMIT: usize = 256;
 
 /// Per-destination output counters. A successful line was accepted by write_all;
 /// it is not a guarantee of fsync or physical durability. Snapshots are not atomic
@@ -38,6 +42,17 @@ pub struct FileStats
 	pub purgeErrors: u64,
 }
 
+/// Destination paths of the current date key (day, or hour with `byHour`),
+/// keyed by source file then producer name ("" for a disabled grouping).
+#[derive(Default)]
+struct PathCache
+{
+	dateKey: Option<(time::Date, u8)>,
+	date: String,
+	entries: HashMap<String, HashMap<String, Arc<[PathBuf]>>>,
+	count: usize,
+}
+
 struct FileState
 {
 	files: VecDeque<(PathBuf, OutputFile)>,
@@ -52,6 +67,7 @@ pub struct File
 	_path: PathBuf,
 	_purgeRootResolved: bool,
 	_files: Mutex<FileState>,
+	_paths: Mutex<PathCache>,
 	_cachedHandles: AtomicUsize,
 	_linesWritten: AtomicU64,
 	_createErrors: AtomicU64,
@@ -65,8 +81,14 @@ pub struct File
 
 impl File
 {
-	pub fn new(config: FileConfig) -> File
+	/// Create a file output. An empty or whitespace-only `config.path` is refused
+	/// with [`Errors::EmptyPath`]: nothing is created or written.
+	pub fn new(config: FileConfig) -> Result<File, Errors>
 	{
+		if config.path.trim().is_empty()
+		{
+			return Err(Errors::EmptyPath);
+		}
 		let fmtComp = (config.formaterCompiler)(&config.lineFormat);
 		// Freeze relative destinations too, so changing cwd cannot redirect retention.
 		// If cwd cannot be resolved, purge refuses this non-absolute root later.
@@ -75,7 +97,7 @@ impl File
 		// Preserve the original absolute spelling. Removing a final separator can
 		// change Windows resolution for directory names ending in a space or dot.
 		let path = resolved.unwrap_or_else(|_| PathBuf::from(&config.path));
-		File {
+		Ok(File {
 			_name: String::new(),
 			_configs: config,
 			_formaterCompiled: fmtComp,
@@ -85,6 +107,7 @@ impl File
 				files: VecDeque::new(),
 				retention: Retention::default(),
 			}),
+			_paths: Mutex::new(PathCache::default()),
 			_cachedHandles: AtomicUsize::new(0),
 			_linesWritten: AtomicU64::new(0),
 			_createErrors: AtomicU64::new(0),
@@ -94,7 +117,7 @@ impl File
 			_purgeRuns: AtomicU64::new(0),
 			_purgedFiles: AtomicU64::new(0),
 			_purgeErrors: AtomicU64::new(0),
-		}
+		})
 	}
 
 	/// Observe failures without sending diagnostics back into the logger.
@@ -122,42 +145,128 @@ impl File
 			return;
 		}
 		let parameters = (self._configs.formaterParamBuilder)(trace, &self._configs.lineReturn);
-		let line = format!("{}\n", self._formaterCompiled.render(parameters));
-		let dateFormat = if self._configs.byHour
+		let mut line = self._formaterCompiled.render(parameters);
+		line.push('\n');
+		let paths = self.destinations(trace);
+		self.writeToFiles(&paths, line.as_bytes());
+	}
+
+	/// Destination paths of a trace. The date component and the paths are
+	/// computed once per date key and (source, producer) pair.
+	fn destinations(&self, trace: &OneTrace) -> Arc<[PathBuf]>
+	{
+		let hour = if self._configs.byHour
 		{
-			format_description!("[year][month][day]_[hour repr:24]")
+			trace.date.hour()
 		}
 		else
 		{
-			format_description!("[year][month][day]")
+			0
 		};
-		let date = trace
-			.date
-			.format(dateFormat)
-			.unwrap_or_else(|_| "00000000".to_string());
-		let mut paths = Vec::with_capacity(3);
-		if let Some(filename) = &self._configs.forceInOneFile
+		let dateKey = (trace.date.date(), hour);
+		let source = if self._configs.bySrc
 		{
-			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
+			trace.filename.as_ref()
 		}
-		if self._configs.bySrc
+		else
 		{
-			let basename = trace.filename.rsplit(['/', '\\']).next().unwrap_or("");
-			let filename = Self::filenameComponent(basename.split('.').next().unwrap_or(""));
-			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
-		}
-		if self._configs.byThreadId
+			""
+		};
+		// Provenance is captured at emission, rather than read from the worker TLS.
+		let producer = if self._configs.byThreadId
 		{
-			// Provenance is captured at emission, rather than read from the worker TLS.
-			let producer = trace
+			trace
 				.context
 				.threadName_get()
 				.as_deref()
-				.unwrap_or(MAIN_THREAD);
-			let filename = Self::filenameComponent(producer);
-			paths.push(self.destinationPath(&format!("{filename}_{date}.trc")));
+				.unwrap_or(MAIN_THREAD)
 		}
-		self.writeToFiles(&paths, line.as_bytes());
+		else
+		{
+			""
+		};
+
+		let mut cache = self._paths.lock();
+		if cache.dateKey != Some(dateKey)
+		{
+			let dateFormat = if self._configs.byHour
+			{
+				format_description!("[year][month][day]_[hour repr:24]")
+			}
+			else
+			{
+				format_description!("[year][month][day]")
+			};
+			cache.date = trace
+				.date
+				.format(dateFormat)
+				.unwrap_or_else(|_| "00000000".to_string());
+			cache.dateKey = Some(dateKey);
+			cache.entries.clear();
+			cache.count = 0;
+		}
+		if let Some(paths) = cache
+			.entries
+			.get(source)
+			.and_then(|producers| producers.get(producer))
+		{
+			return paths.clone();
+		}
+		if cache.count >= PATH_CACHE_LIMIT
+		{
+			cache.entries.clear();
+			cache.count = 0;
+		}
+		let paths: Arc<[PathBuf]> = self.destinationsBuild(&cache.date, source, producer).into();
+		cache
+			.entries
+			.entry(source.to_owned())
+			.or_default()
+			.insert(producer.to_owned(), paths.clone());
+		cache.count += 1;
+		paths
+	}
+
+	/// `source`/`producer` are only used when their grouping is enabled.
+	fn destinationsBuild(&self, date: &str, source: &str, producer: &str) -> Vec<PathBuf>
+	{
+		let mut paths = Vec::with_capacity(3);
+		if let Some(filename) = &self._configs.forceInOneFile
+		{
+			Self::pushUnique(
+				&mut paths,
+				self.destinationPath(&format!("{filename}_{date}.trc")),
+			);
+		}
+		if self._configs.bySrc
+		{
+			let basename = source.rsplit(['/', '\\']).next().unwrap_or("");
+			let filename = Self::filenameComponent(basename.split('.').next().unwrap_or(""));
+			Self::pushUnique(
+				&mut paths,
+				self.destinationPath(&format!("{filename}_{date}.trc")),
+			);
+		}
+		if self._configs.byThreadId
+		{
+			let filename = Self::filenameComponent(producer);
+			Self::pushUnique(
+				&mut paths,
+				self.destinationPath(&format!("{filename}_{date}.trc")),
+			);
+		}
+		paths
+	}
+
+	// Destinations resolving to the same path receive the line once. Paths are
+	// compared exactly: names differing only by case remain distinct, even on
+	// case-insensitive filesystems.
+	fn pushUnique(paths: &mut Vec<PathBuf>, path: PathBuf)
+	{
+		if !paths.contains(&path)
+		{
+			paths.push(path);
+		}
 	}
 
 	// Preserve forceInOneFile path semantics, including separators and .. .
@@ -450,10 +559,86 @@ mod tests
 		}
 	}
 
+	fn traceAt(date: time::OffsetDateTime, filename: &str, thread: Option<&str>) -> OneTrace
+	{
+		let mut context = Context::default();
+		if let Some(thread) = thread
+		{
+			context.threadName_set(thread);
+		}
+		OneTrace {
+			message: String::new(),
+			date,
+			level: crate::components::level::Level::NORMAL,
+			context: Arc::new(context),
+			filename: filename.to_string().into(),
+			fileline: 1,
+			backtraces: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn cached_destinations_follow_date_source_and_producer()
+	{
+		let output = File::new(FileConfig {
+			path: "root/../out".to_string(),
+			forceInOneFile: Some("all".to_string()),
+			bySrc: true,
+			byThreadId: true,
+			byHour: true,
+			..FileConfig::default()
+		})
+		.unwrap();
+		let root = output._path.as_os_str().to_string_lossy().into_owned();
+		let names = |paths: Arc<[PathBuf]>| {
+			paths
+				.iter()
+				.map(|path| {
+					let path = path.as_os_str().to_string_lossy().into_owned();
+					assert!(path.starts_with(&format!("{root}/")), "{path}");
+					path[root.len() + 1..].to_string()
+				})
+				.collect::<Vec<_>>()
+		};
+		let morning = time::macros::datetime!(2026-01-02 08:15 UTC);
+		let first = output.destinations(&traceAt(morning, "src/app.rs", None));
+		assert_eq!(
+			names(first.clone()),
+			[
+				"all_20260102_08.trc",
+				"app_20260102_08.trc",
+				"MAIN_20260102_08.trc"
+			]
+		);
+		// Same key: the cached set is reused.
+		let again = output.destinations(&traceAt(
+			time::macros::datetime!(2026-01-02 08:59 UTC),
+			"src/app.rs",
+			None,
+		));
+		assert!(Arc::ptr_eq(&first, &again));
+		assert_eq!(
+			names(output.destinations(&traceAt(morning, "lib/app.rs", Some("all")))),
+			["all_20260102_08.trc", "app_20260102_08.trc"]
+		);
+		assert_eq!(
+			names(output.destinations(&traceAt(
+				time::macros::datetime!(2026-01-02 09:00 UTC),
+				"src/app.rs",
+				Some("w/1"),
+			))),
+			[
+				"all_20260102_09.trc",
+				"app_20260102_09.trc",
+				"w_1_20260102_09.trc"
+			]
+		);
+	}
+
 	#[test]
 	fn complete_partial_writes_and_count_errors()
 	{
-		let output = File::new(FileConfig::default());
+		let output = File::new(FileConfig::default()).unwrap();
 		let mut writer = PartialWriter {
 			bytes: Vec::new(),
 			remaining: 100,

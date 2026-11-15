@@ -1,9 +1,14 @@
 #![cfg(feature = "hconfig")]
 #![allow(unused_parens)]
+#![allow(non_snake_case)]
+
+#[path = "support/capture.rs"]
+mod capture;
 
 use Hconfig::HConfigManager::HConfigManager;
 use Hconfig::IO::json::WrapperJson;
-use htrace::HTrace;
+use Hconfig::tinyjson::JsonValue;
+use capture::Capture;
 use htrace::components::context::Context;
 use htrace::components::level::Level;
 #[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
@@ -12,6 +17,7 @@ use htrace::htracer::HTracer;
 use htrace::modules::command_line_config::CommandLineConfig;
 use htrace::modules::file_config::FileConfig;
 use htrace::modules::{command_line, file};
+use htrace::{Errors, HTrace};
 use std::fs;
 
 #[test]
@@ -36,40 +42,118 @@ fn trace_with_hconfig()
 		.create::<WrapperJson>("htrace")
 		.expect("bug from hconfig");
 
+	// Error cases: unknown config, unreachable node, node that is not an object.
+	let missingConfig = FileConfig::from_hconfig("absent", "file", FileConfig::default());
+	assert!(
+		matches!(&missingConfig, Err(Errors::CannotFoundConfigNode(name)) if name == "absent/file"),
+		"{:?}",
+		missingConfig.err()
+	);
+	{
+		let mut config = HConfigManager::singleton().get("htrace").unwrap();
+		config.value_set("scalar", JsonValue::String("not an object".into()));
+	}
+	let unreachable =
+		CommandLineConfig::from_hconfig("htrace", "scalar/cmd", CommandLineConfig::default());
+	assert!(
+		matches!(&unreachable, Err(Errors::CannotFoundConfigNode(name)) if name == "scalar/cmd"),
+		"{:?}",
+		unreachable.err()
+	);
+	{
+		let mut config = HConfigManager::singleton().get("htrace").unwrap();
+		config.value_set("array", JsonValue::Array(vec![]));
+	}
+	// Hconfig panics on an out-of-range array index; Htrace reports it as unreachable.
+	let outOfRange =
+		CommandLineConfig::from_hconfig("htrace", "array/5/cmd", CommandLineConfig::default());
+	assert!(
+		matches!(&outOfRange, Err(Errors::CannotFoundConfigNode(name)) if name == "array/5/cmd"),
+		"{:?}",
+		outOfRange.err()
+	);
+	let notObject =
+		CommandLineConfig::from_hconfig("htrace", "scalar", CommandLineConfig::default());
+	assert!(
+		matches!(&notObject, Err(Errors::ModuleConfigError(module, _)) if module == "command_line"),
+		"{:?}",
+		notObject.err()
+	);
+	let notObject = FileConfig::from_hconfig("htrace", "scalar", FileConfig::default());
+	assert!(
+		matches!(&notObject, Err(Errors::ModuleConfigError(module, _)) if module == "file"),
+		"{:?}",
+		notObject.err()
+	);
+	let emptyPath = FileConfig::from_hconfig(
+		"htrace",
+		"emptyPath",
+		FileConfig {
+			path: "".into(),
+			..FileConfig::default()
+		},
+	);
+	match emptyPath
+	{
+		Err(Errors::ModuleConfigError(module, cause)) =>
+		{
+			assert_eq!(module, "file");
+			assert!(matches!(
+				cause.downcast_ref::<Errors>(),
+				Some(Errors::EmptyPath)
+			));
+		}
+		other => panic!("{:?}", other.err()),
+	}
+
+	// Absent nodes are created and filled with the defaults.
+	let capture = Capture::new();
 	let mut global_context = Context::default();
+	global_context.name_set("hconfig-global");
+	global_context.module_add("capture", capture.clone());
 	global_context.module_add(
 		"cmd",
-		command_line::CommandLine::new(CommandLineConfig::create_from_hconfig(
-			HConfigManager::singleton()
-				.get("htrace")
-				.unwrap()
-				.value_get_mut("cmd")
-				.unwrap(),
-			CommandLineConfig::default(),
-		)),
+		command_line::CommandLine::new(
+			CommandLineConfig::from_hconfig("htrace", "cmd", CommandLineConfig::default()).unwrap(),
+		),
 	);
 	global_context.module_add(
 		"file",
-		file::File::new(FileConfig::create_from_hconfig(
-			HConfigManager::singleton()
-				.get("htrace")
-				.unwrap()
-				.value_get_mut("file")
-				.unwrap(),
-			fileConfig,
-		)),
+		file::File::new(FileConfig::from_hconfig("htrace", "file", fileConfig).unwrap()).unwrap(),
 	);
 	global_context.level_setMin(Some(Level::DEBUG));
 	#[cfg(all(not(feature = "tracing_consumer"), not(feature = "log_consumer")))]
-	HTracer::globalContext_set(global_context);
+	HTracer::globalContext_set(global_context).unwrap();
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(global_context, HtraceBridge::default());
+	HTracer::globalContext_set(global_context, HtraceBridge::default()).unwrap();
 
 	// simple trace of variable
 	let string_test = "test with hconfig".to_string();
 	HTrace!(string_test);
 
+	HTracer::flush().unwrap();
+
+	let traces = capture.snapshot();
+	assert_eq!(traces.len(), 1, "{traces:#?}");
+	assert_eq!(traces[0].level, Level::NORMAL);
+	assert_eq!(traces[0].message, "test with hconfig");
+	assert_eq!(traces[0].contextName.as_deref(), Some("hconfig-global"));
+	assert_eq!(traces[0].backtraceCount, 0);
+	// The file module built from the Hconfig node writes to the supplied path.
+	let written = fs::read_dir(testPath.join("traces"))
+		.unwrap()
+		.map(|entry| fs::read_to_string(entry.unwrap().path()).unwrap())
+		.collect::<Vec<_>>();
+	assert!(
+		!written.is_empty()
+			&& written
+				.iter()
+				.all(|contents| contents.contains("test with hconfig")),
+		"{written:?}"
+	);
+
 	// we need to wait all threads are done
 	HTracer::shutdown().unwrap();
+	assert_eq!(capture.globalExits(), 1);
 	fs::remove_dir_all(&testPath).unwrap();
 }

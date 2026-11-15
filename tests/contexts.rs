@@ -29,7 +29,7 @@ impl Recorder
 		self.records.lock().unwrap().push(Record {
 			kind: "trace",
 			message: trace.message.clone(),
-			context: trace.context.clone(),
+			context: Context::clone(&trace.context),
 		});
 	}
 
@@ -82,14 +82,14 @@ impl ModuleAbstract for Recorder
 fn install(context: Context)
 {
 	#[cfg(not(any(feature = "tracing_consumer", feature = "log_consumer")))]
-	HTracer::globalContext_set(context);
+	HTracer::globalContext_set(context).unwrap();
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(context, HtraceBridge::default());
+	HTracer::globalContext_set(context, HtraceBridge::default()).unwrap();
 }
 
 fn trace(message: &'static str)
 {
-	HTracer::trace(&message, Level::NORMAL, file!(), line!(), Vec::new());
+	HTracer::trace(&message, Level::NORMAL, file!(), line!(), None);
 }
 
 fn exit_names(recorder: &Recorder) -> Vec<String>
@@ -243,6 +243,7 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 		trace("main-restored-native");
 	}
 
+	// The native name of this thread is ignored: it produces as MAIN.
 	std::thread::Builder::new()
 		.name("Async Compute Task Pool (0)".to_owned())
 		.spawn(|| {
@@ -282,13 +283,13 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 		("main-inherited-name", "main-custom"),
 		("main-restored-parent", "main-custom"),
 		("main-restored-native", "MAIN"),
-		("taskpool-before-group", "Async Compute Task Pool (0)"),
+		("taskpool-before-group", "MAIN"),
 		("taskpool-parent-name", "taskpool-custom"),
 		("taskpool-inherited-name", "taskpool-custom"),
 		("taskpool-renamed-name", "taskpool-inner"),
 		("taskpool-inherited-inner-name", "taskpool-inner"),
 		("taskpool-restored-parent", "taskpool-custom"),
-		("taskpool-restored-native", "Async Compute Task Pool (0)"),
+		("taskpool-restored-native", "MAIN"),
 	]
 	{
 		let record = records
@@ -305,7 +306,7 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 		("taskpool-renamed-child", "taskpool-inner"),
 		("taskpool-unnamed-child", "taskpool-custom"),
 		("taskpool-group", "taskpool-custom"),
-		("taskpool-native", "Async Compute Task Pool (0)"),
+		("taskpool-native", "MAIN"),
 	]
 	{
 		let exits = records
@@ -338,16 +339,14 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 				builder
 					.spawn(move || {
 						let current = std::thread::current();
-						let producerName = current
-							.name()
-							.map(str::to_owned)
-							.unwrap_or_else(|| "MAIN".to_owned());
+						// Native thread names are never used.
+						let producerName = "MAIN".to_owned();
 						let message = format!("producer-{:?}-{index}", current.id());
 						let mut context: Context = message.clone().into();
 						context.level_setMin(Some(Level::NORMAL));
 						let _span = Span::new(context);
 						barrier.wait();
-						HTracer::trace(&message, Level::NORMAL, file!(), line!(), Vec::new());
+						HTracer::trace(&message, Level::NORMAL, file!(), line!(), None);
 						barrier.wait();
 						(message, producerName)
 					})
@@ -382,13 +381,7 @@ fn contexts_are_snapshots_and_spans_own_logical_exits()
 	}
 
 	// Old snapshots and replacement callbacks keep the previous configuration.
-	HTracer::trace(
-		&"before-replace",
-		Level::ERROR,
-		file!(),
-		line!(),
-		Vec::new(),
-	);
+	HTracer::trace(&"before-replace", Level::ERROR, file!(), line!(), None);
 	let replacement = Recorder::default();
 	let mut global: Context = "replacement".into();
 	global.module_add("replacement", replacement.clone());

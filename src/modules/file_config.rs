@@ -3,14 +3,20 @@ use crate::components::formater::{
 };
 
 #[cfg(feature = "hconfig")]
+use crate::Errors;
+#[cfg(feature = "hconfig")]
 use Hconfig::tinyjson::JsonValue;
 
 /// note: if byThreadId is false, bySrc is false and forceInOneFile is None, no trace will be written
 pub struct FileConfig
 {
-	/// base path where to write files
+	/// base path where to write files. Must not be empty or whitespace-only:
+	/// `File::new` refuses it with `Errors::EmptyPath`.
+	/// Destinations resolving to the same path receive each line once; paths that
+	/// differ only by case stay distinct, even on case-insensitive filesystems.
 	pub path: String,
-	/// String added after a newline or carriage return ("\n"/"\r") in a trace.
+	/// String added after each real line break of `{msg}` ("\n", "\r", "\r\n" or "\n\r").
+	/// Literal backslash sequences are kept; other fields replace line breaks with a space.
 	pub lineReturn: String,
 	/// format of the trace, view HtraceDefaultFormater for available variable
 	pub lineFormat: String,
@@ -57,16 +63,40 @@ impl Default for FileConfig
 #[cfg(feature = "hconfig")]
 impl FileConfig
 {
-	pub fn create_from_hconfig(configs: &mut JsonValue, mut newConfig: Self) -> Self
+	/// Build a configuration from the `moduleKey` node of the loaded Hconfig
+	/// `configName`, starting from `defaults` (see `create_from_hconfig`).
+	///
+	/// Returns `Errors::CannotFoundConfigNode("configName/moduleKey")` when the
+	/// config `configName` is not loaded, and `Errors::CannotFoundConfigNode("moduleKey")`
+	/// when the node cannot be reached. An absent node is created by Hconfig and
+	/// filled with `defaults`.
+	pub fn from_hconfig(configName: &str, moduleKey: &str, defaults: Self) -> Result<Self, Errors>
 	{
-		use crate::modules::utils_hconfig::{setConfig_String, setConfig_boolean};
+		crate::modules::utils_hconfig::fromHconfig(
+			configName,
+			moduleKey,
+			defaults,
+			Self::create_from_hconfig,
+		)
+	}
+
+	/// Apply the JSON object `configs` over `newConfig`. Missing or badly typed
+	/// values keep the `newConfig` value, which is written back into `configs`.
+	///
+	/// Returns `Errors::ModuleConfigError("file", cause)` when `configs` is not a
+	/// JSON object, or when the resulting `path` is empty or whitespace-only (the
+	/// cause then downcasts to `Errors::EmptyPath`).
+	pub fn create_from_hconfig(configs: &mut JsonValue, mut newConfig: Self)
+	-> Result<Self, Errors>
+	{
+		use crate::modules::utils_hconfig::{notAnObject, setConfig_String, setConfig_boolean};
 		use Hconfig::tinyjson::JsonValue;
 
 		newConfig.purgeAfterDays = newConfig.purgeAfterDays.filter(|days| *days > 0);
 		let JsonValue::Object(config) = configs
 		else
 		{
-			return newConfig;
+			return Err(notAnObject("file", configs));
 		};
 		setConfig_String(config, "path", &mut newConfig.path, |_| true);
 		setConfig_String(config, "lineReturn", &mut newConfig.lineReturn, |_| true);
@@ -116,7 +146,14 @@ impl FileConfig
 			);
 		}
 
-		return newConfig;
+		if newConfig.path.trim().is_empty()
+		{
+			return Err(Errors::ModuleConfigError(
+				"file".to_string(),
+				anyhow::Error::new(Errors::EmptyPath).context("'path' must not be empty"),
+			));
+		}
+		return Ok(newConfig);
 	}
 }
 
@@ -159,7 +196,7 @@ mod tests
 			]
 			{
 				let mut json = JsonValue::Object(HashMap::from([("purgeAfterDays".into(), value)]));
-				let config = FileConfig::create_from_hconfig(&mut json, defaults());
+				let config = FileConfig::create_from_hconfig(&mut json, defaults()).unwrap();
 				assert_eq!(config.purgeAfterDays, expected);
 			}
 		}
@@ -187,7 +224,7 @@ mod tests
 					object.insert("purgeAfterDays".into(), value);
 				}
 				let mut json = JsonValue::Object(object);
-				let config = FileConfig::create_from_hconfig(&mut json, defaults());
+				let config = FileConfig::create_from_hconfig(&mut json, defaults()).unwrap();
 				assert_eq!(config.purgeAfterDays, Some(7));
 				let JsonValue::Object(object) = json
 				else
@@ -220,7 +257,8 @@ mod tests
 							purgeAfterDays: defaultDays,
 							..defaults()
 						},
-					);
+					)
+					.unwrap();
 					assert_eq!(config.purgeAfterDays, None);
 					let JsonValue::Object(object) = json
 					else
@@ -255,7 +293,7 @@ mod tests
 					object.insert("purgeOnStartup".into(), value);
 				}
 				let mut json = JsonValue::Object(object);
-				let config = FileConfig::create_from_hconfig(&mut json, defaults());
+				let config = FileConfig::create_from_hconfig(&mut json, defaults()).unwrap();
 				assert_eq!(config.purgeOnStartup, expected);
 				let JsonValue::Object(object) = json
 				else
@@ -268,6 +306,60 @@ mod tests
 			}
 		}
 
+		fn assert_module_error(
+			result: Result<FileConfig, crate::Errors>,
+			expected: &str,
+		) -> anyhow::Error
+		{
+			match result
+			{
+				Err(crate::Errors::ModuleConfigError(module, cause)) =>
+				{
+					assert_eq!(module, expected);
+					cause
+				}
+				Err(other) => panic!("unexpected error {other:?}"),
+				Ok(_) => panic!("expected a module configuration error"),
+			}
+		}
+
+		#[test]
+		fn empty_hconfig_path_is_a_module_config_error()
+		{
+			for path in ["", "  "]
+			{
+				let mut json = JsonValue::Object(HashMap::from([(
+					"path".into(),
+					JsonValue::String(path.into()),
+				)]));
+				let result = FileConfig::create_from_hconfig(&mut json, FileConfig::default());
+				let message = result.as_ref().err().map(|error| error.to_string());
+				let cause = assert_module_error(result, "file");
+				assert!(matches!(
+					cause.downcast_ref::<crate::Errors>(),
+					Some(crate::Errors::EmptyPath)
+				));
+				assert_eq!(
+					message.as_deref(),
+					Some("module 'file' configuration returned a error : 'path' must not be empty")
+				);
+			}
+		}
+
+		#[test]
+		fn empty_default_path_without_override_is_refused()
+		{
+			let mut json = JsonValue::Object(HashMap::new());
+			let result = FileConfig::create_from_hconfig(
+				&mut json,
+				FileConfig {
+					path: " ".into(),
+					..FileConfig::default()
+				},
+			);
+			assert_module_error(result, "file");
+		}
+
 		#[test]
 		fn malformed_force_in_one_file_does_not_skip_retention()
 		{
@@ -276,35 +368,29 @@ mod tests
 				("purgeAfterDays".into(), JsonValue::Number(3.0)),
 				("purgeOnStartup".into(), JsonValue::Boolean(true)),
 			]));
-			let config = FileConfig::create_from_hconfig(&mut json, FileConfig::default());
+			let config = FileConfig::create_from_hconfig(&mut json, FileConfig::default()).unwrap();
 			assert_eq!(config.purgeAfterDays, Some(3));
 			assert!(config.purgeOnStartup);
 		}
 
 		#[test]
-		fn non_objects_preserve_custom_defaults_and_normalize_zero()
+		fn non_objects_are_module_config_errors()
 		{
-			for defaultDays in [None, Some(0), Some(7)]
+			for (mut json, kind) in [
+				(JsonValue::Null, "null"),
+				(JsonValue::Number(2.0), "a number"),
+				(JsonValue::Boolean(false), "a boolean"),
+				(JsonValue::String("invalid".into()), "a string"),
+				(JsonValue::Array(vec![]), "an array"),
+			]
 			{
-				for mut json in [
-					JsonValue::Null,
-					JsonValue::Number(2.0),
-					JsonValue::Boolean(false),
-					JsonValue::String("invalid".into()),
-					JsonValue::Array(vec![]),
-				]
-				{
-					let config = FileConfig::create_from_hconfig(
-						&mut json,
-						FileConfig {
-							purgeAfterDays: defaultDays,
-							..defaults()
-						},
-					);
-					assert_eq!(config.purgeAfterDays, defaultDays.filter(|days| *days > 0));
-					assert!(config.purgeOnStartup);
-					assert!(!matches!(json, JsonValue::Object(_)));
-				}
+				let result = FileConfig::create_from_hconfig(&mut json, defaults());
+				let cause = assert_module_error(result, "file");
+				assert_eq!(
+					cause.to_string(),
+					format!("configuration node must be a JSON object, found {kind}")
+				);
+				assert!(!matches!(json, JsonValue::Object(_)));
 			}
 		}
 	}

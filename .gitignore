@@ -1,7 +1,6 @@
 /.idea/
 .directory
 Htrace.iml
-Cargo.lock
 /config
 /traces
 /target

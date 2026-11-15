@@ -30,6 +30,12 @@ Arguments are `MODE PRODUCERS TRACES_PER_PRODUCER`. Available modes:
 - `formatted`: producer and index interpolated into the message.
 - `backtrace`: an ERROR message with capture/resolution through the historical API.
 - `slow`: a literal NORMAL message with a callback delayed by a 100 µs `sleep`.
+- `spans3`: each producer opens three nested named spans (`Spaned!`) once before its loop, then emits literal NORMAL messages.
+- `span_per_trace`: each literal NORMAL message is wrapped in its own named span, opened and closed around the call.
+- `render`: like `simple`, but the counting module also renders each trace with `FormaterCompile`/`FormaterParamBuilder` (`{time} {lvl} ({thread:>, }{file}:l{line}) : {msg}`).
+- `file`: like `simple`, plus the real `File` module (default `byThreadId` layout) writing into a fresh temporary directory removed at exit; the run fails if written lines differ from callbacks or an I/O error is counted. Requires `default_module`.
+- `log`: `log::info!` through the log bridge (mapped to NOTICE). Requires `log_consumer`.
+- `tracing`: `tracing::info!` inside a `tracing` span entered once per producer (mapped to NOTICE). Requires `tracing_consumer`.
 
 `formatted` measures message formatting at the call site; the counting module
 does not render a line with `FormaterCompile`. The historical runs used the normal
@@ -38,8 +44,11 @@ your Cargo profile configuration. The actual symbol
 count and resolution may vary with the toolchain. The consumer delay is a
 request to the scheduler, not a guaranteed exact duration.
 
-The workload is bounded: 1–16 producers, with at most 20,000 ordinary calls,
-320 backtrace calls or 2,000 slow calls in total. Always retain the external
+A mode whose feature is disabled exits with a "requires feature" error.
+
+The workload is bounded: 1–16 producers, with at most 20,000 ordinary calls
+(every mode except `backtrace` and `slow`), 320 backtrace calls or 2,000 slow
+calls in total. Always retain the external
 30-second timeout. A single warm-up call on the main thread waits for its
 callback (except when filtered), with a five-second internal deadline.
 Producer threads have no individual warm-up.
@@ -251,3 +260,21 @@ lifecycle. Scenarios using the supplied modules are gated by `default_module`;
 bridges and Hconfig are gated by their respective features. Trace/config paths
 are process-specific temporary directories; only directories created by the
 test are removed.
+
+## Review measurements (htrace_review, 2026-11-15)
+
+`benchmarks/review_bench.py REPO OUT_JSON` runs every mode with 1 and 8
+producers, three repetitions each, in separate processes under a 30-second
+timeout, and records medians. `review_baseline.json` is the reference taken on
+commit `ae0cf87` (plus the new harness modes) before any review fix; the
+after-fix run uses the same script and parameters.
+
+With one producer, p95 and p99 are bimodal from one process to the next
+(roughly 1 µs or 4–5 µs), on the baseline as well as after the fixes. Three
+repetitions therefore cannot compare tails: the medians in the JSON files
+show a 1-producer p99 rise for `simple` and `formatted` that does not hold.
+A check of 15 alternating runs per version (`simple` and `formatted`,
+1 producer, 2,000 traces) gives median p50/p95/p99 of 862/1,893/2,845 →
+171/781/1,072 ns for `simple` and 902/4,057/6,543 → 300/3,366/4,478 ns for
+`formatted`. These tails mostly follow wake-ups of the parked worker
+(futex) and scheduling, not the cost of building the trace.

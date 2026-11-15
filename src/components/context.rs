@@ -19,9 +19,9 @@ pub struct Context
 {
 	_threadName: Option<String>,
 	_name: Option<String>,
-	_modules: HashMap<String, Option<Arc<dyn ModuleAbstract>>>,
+	_modules: Arc<HashMap<String, Option<Arc<dyn ModuleAbstract>>>>,
 	_minlvl: Option<Level>,
-	_extras: HashMap<String, String>,
+	_extras: Arc<HashMap<String, String>>,
 }
 
 impl Context
@@ -36,7 +36,7 @@ impl Context
 	)
 	{
 		let name = name.into();
-		self._modules.insert(name, Some(Arc::new(module)));
+		Arc::make_mut(&mut self._modules).insert(name, Some(Arc::new(module)));
 	}
 
 	/// same as module_add, but with already and module in an "Arc"
@@ -47,14 +47,14 @@ impl Context
 	)
 	{
 		let name = name.into();
-		self._modules.insert(name, Some(module));
+		Arc::make_mut(&mut self._modules).insert(name, Some(module));
 	}
 
 	/// discard a parent module (discard it also for childs)
 	pub fn module_discard(&mut self, name: impl Into<String>)
 	{
 		let name = name.into();
-		self._modules.insert(name, None);
+		Arc::make_mut(&mut self._modules).insert(name, None);
 	}
 
 	pub fn modules_get(&self) -> &HashMap<String, Option<Arc<dyn ModuleAbstract>>>
@@ -75,13 +75,18 @@ impl Context
 		self._minlvl.as_ref()
 	}
 
-	/// Override the producer's display name for this span and its children.
+	/// Override the producer's display name and file group for the span
+	/// installed from this context and its children. The innermost explicit name
+	/// wins and the outer name is restored when the span exits. Without one, every
+	/// producer is `MAIN`: the native OS thread name is never used. On the global
+	/// context (`HTracer::globalContext_set`) this value is ignored.
 	pub fn threadName_set(&mut self, threadName: impl Into<String>)
 	{
 		self._threadName = Some(threadName.into());
 	}
 
-	/// Get the explicit thread name, or None to inherit the parent or producer name.
+	/// Get the explicit thread name, or None to inherit the parent span name
+	/// (`MAIN` by default). Resolved trace snapshots always carry a name.
 	pub fn threadName_get(&self) -> &Option<String>
 	{
 		return &self._threadName;
@@ -102,7 +107,7 @@ impl Context
 	/// set extra data
 	pub fn extra_set(&mut self, name: impl Into<String>, content: impl Into<String>)
 	{
-		self._extras.insert(name.into(), content.into());
+		Arc::make_mut(&mut self._extras).insert(name.into(), content.into());
 	}
 
 	/// get extra data
@@ -115,8 +120,13 @@ impl Context
 	/// merge extra
 	pub fn extra_merge(&mut self, other: &HashMap<String, String>)
 	{
+		if other.is_empty()
+		{
+			return;
+		}
+		let extras = Arc::make_mut(&mut self._extras);
 		other.iter().for_each(|(key, data)| {
-			self._extras.insert(key.clone(), data.clone());
+			extras.insert(key.clone(), data.clone());
 		});
 	}
 
@@ -124,6 +134,65 @@ impl Context
 	pub fn extra_getAll(&self) -> &HashMap<String, String>
 	{
 		return &self._extras;
+	}
+
+	/// Shallow copy of this snapshot with only its name replaced: modules and
+	/// extras stay shared.
+	#[cfg(feature = "tracing_consumer")]
+	pub(crate) fn renamed(&self, name: String) -> Context
+	{
+		Self {
+			_threadName: self._threadName.clone(),
+			_name: Some(name),
+			_modules: self._modules.clone(),
+			_minlvl: self._minlvl,
+			_extras: self._extras.clone(),
+		}
+	}
+
+	/// Resolve a child snapshot from `self`, an already resolved parent, and the
+	/// span's own `delta`: explicit thread name, name and level override; modules
+	/// are added or discarded (`None`); extras are merged. A map the span leaves
+	/// untouched is shared with the parent instead of being copied.
+	pub(crate) fn resolve_child(&self, delta: &Context) -> Context
+	{
+		let modules = match delta._modules.is_empty()
+		{
+			true => self._modules.clone(),
+			false =>
+			{
+				let mut modules = HashMap::clone(&self._modules);
+				for (key, module) in delta._modules.iter()
+				{
+					modules.insert(key.clone(), module.clone());
+				}
+				Arc::new(modules)
+			}
+		};
+		let extras = match delta._extras.is_empty()
+		{
+			true => self._extras.clone(),
+			false =>
+			{
+				let mut extras = HashMap::clone(&self._extras);
+				for (key, data) in delta._extras.iter()
+				{
+					extras.insert(key.clone(), data.clone());
+				}
+				Arc::new(extras)
+			}
+		};
+		Self {
+			_threadName: delta
+				._threadName
+				.as_ref()
+				.or(self._threadName.as_ref())
+				.cloned(),
+			_name: delta._name.as_ref().or(self._name.as_ref()).cloned(),
+			_modules: modules,
+			_minlvl: delta._minlvl.or(self._minlvl),
+			_extras: extras,
+		}
 	}
 }
 

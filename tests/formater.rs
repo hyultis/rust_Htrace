@@ -13,9 +13,9 @@ use time::macros::datetime;
 fn formater()
 {
 	#[cfg(all(not(feature = "tracing_consumer"), not(feature = "log_consumer")))]
-	HTracer::globalContext_set(Context::default());
+	HTracer::globalContext_set(Context::default()).unwrap();
 	#[cfg(any(feature = "tracing_consumer", feature = "log_consumer"))]
-	HTracer::globalContext_set(Context::default(), HtraceBridge::default());
+	HTracer::globalContext_set(Context::default(), HtraceBridge::default()).unwrap();
 
 	let compiled = FormaterCompile(
 		&"{time} {lvl} ({thread:>, }{file}:l{line} |{extra}{extra[test]}|) : {msg}".to_string(),
@@ -31,8 +31,8 @@ fn formater()
 			message: "message line".to_string(),
 			date: datetime!(1900-01-01 0:00 UTC),
 			level: Level::DEBUG,
-			context,
-			filename: "file.rs".to_string(),
+			context: std::sync::Arc::new(context),
+			filename: "file.rs".into(),
 			fileline: 42,
 			backtraces: vec![],
 		},

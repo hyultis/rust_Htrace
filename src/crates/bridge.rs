@@ -1,43 +1,121 @@
 use crate::components::level::Level;
 #[cfg(feature = "tracing_consumer")]
-use tracing::Metadata;
+use tracing::subscriber::Interest;
+#[cfg(feature = "tracing_consumer")]
+use tracing::{Event, Metadata, Subscriber};
+#[cfg(feature = "tracing_consumer")]
+use tracing_subscriber::layer::{Context, Filter, Layer};
+#[cfg(feature = "tracing_consumer")]
+use tracing_subscriber::registry::LookupSpan;
 
+/// Span-based filter for `tracing` events. Only events emitted inside at least
+/// one span are filtered: events outside any span always pass. Ancestors are
+/// the event's parent span (explicit or current) and all its parents; names
+/// are compared exactly. Empty lists have no special meaning.
 #[cfg(feature = "tracing_consumer")]
-use tracing_subscriber::Layer;
-#[cfg(feature = "tracing_consumer")]
-use tracing_subscriber::filter::dynamic_filter_fn;
-#[cfg(feature = "tracing_consumer")]
-use tracing_subscriber::layer::Context;
-
-#[cfg(feature = "tracing_consumer")]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HtraceBridgeSpanFilterList
 {
-	/// Allow only some specific spans (empty list = deny all)
+	/// Every event passes (default).
+	#[default]
+	AllowAll,
+	/// Every event inside a span is rejected.
+	DenyAll,
+	/// An event inside a span passes only if at least one ancestor span has a
+	/// listed name (`Allow(vec![])` rejects every event inside a span).
 	Allow(Vec<String>),
-	/// Deny some specific spans (empty list = allow all)
+	/// An event inside a span is rejected if at least one ancestor span has a
+	/// listed name (`Deny(vec![])` lets everything pass).
 	Deny(Vec<String>),
 }
 
+/// Per-layer filter applying `HtraceBridgeSpanFilterList` to events. Spans
+/// themselves stay enabled so that the full ancestry remains visible.
 #[cfg(feature = "tracing_consumer")]
-impl Default for HtraceBridgeSpanFilterList
+struct SpanFilter
 {
-	fn default() -> Self
+	list: HtraceBridgeSpanFilterList,
+	/// Minimum level the bridge accepts (`tracing_min_level`).
+	minLevel: Level,
+}
+
+#[cfg(feature = "tracing_consumer")]
+impl SpanFilter
+{
+	/// Spans always pass; events pass from `tracing_min_level`.
+	fn levelEnabled(&self, metadata: &Metadata<'_>) -> bool
 	{
-		HtraceBridgeSpanFilterList::Deny(vec![])
+		!metadata.is_event()
+			|| crate::crates::tracing::TracingLevelToHtraceMapper(metadata.level()).tou8()
+				>= self.minLevel.tou8()
 	}
 }
 
-#[derive(Clone)]
+#[cfg(feature = "tracing_consumer")]
+impl<S> Filter<S> for SpanFilter
+where
+	S: Subscriber + for<'a> LookupSpan<'a>,
+{
+	fn enabled(&self, metadata: &Metadata<'_>, _: &Context<'_, S>) -> bool
+	{
+		self.levelEnabled(metadata)
+	}
+
+	/// Event callsites below `tracing_min_level` are disabled for this layer
+	/// only (other layers are unaffected); spans are never disabled, so span
+	/// paths and the span list keep seeing every ancestor. No level hint is
+	/// reported. Events that may be rejected by the span list stay `sometimes`:
+	/// tracing-subscriber expects `enabled` to run before an `event_enabled`
+	/// that can reject (its debug assertions fail otherwise).
+	fn callsite_enabled(&self, metadata: &'static Metadata<'static>) -> Interest
+	{
+		if !self.levelEnabled(metadata)
+		{
+			return Interest::never();
+		}
+		match metadata.is_event() && self.list != HtraceBridgeSpanFilterList::AllowAll
+		{
+			true => Interest::sometimes(),
+			false => Interest::always(),
+		}
+	}
+
+	fn event_enabled(&self, event: &Event<'_>, cx: &Context<'_, S>) -> bool
+	{
+		let (names, allow) = match &self.list
+		{
+			HtraceBridgeSpanFilterList::AllowAll => return true,
+			HtraceBridgeSpanFilterList::DenyAll => return cx.event_span(event).is_none(),
+			HtraceBridgeSpanFilterList::Allow(names) => (names, true),
+			HtraceBridgeSpanFilterList::Deny(names) => (names, false),
+		};
+		let Some(mut ancestors) = cx.event_scope(event)
+		else
+		{
+			return true;
+		};
+		let listed = ancestors.any(|span| {
+			let spanName = span.name();
+			names.iter().any(|name| name.as_str() == spanName)
+		});
+		listed == allow
+	}
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HtraceBridge
 {
-	/// minimum level for backtrace (default warn, use None to disable, use Some(Level::min()) to enable all)
+	/// minimum level for backtrace (default error, like the macros; use None to disable, use Some(Level::min()) to enable all)
 	pub min_level_backtrace: Option<Level>,
 
 	/// Htrace.level::DEBUG is the minimum level (that must be set here), correspond to: Log.level::Trace is the maximum level
 	#[cfg(feature = "log_consumer")]
 	pub log_min_level: Level,
 	/// Htrace.level::DEBUG is the minimum level (that must be set here), correspond to: Tracing.level::Trace is the maximum level
+	///
+	/// Through `filtered()` (as installed by `globalContext_set`), event
+	/// callsites below this level are disabled for the bridge layer; spans of any
+	/// level stay enabled, so span paths and `tracing_filter_span` are unaffected.
 	#[cfg(feature = "tracing_consumer")]
 	pub tracing_min_level: Level,
 
@@ -73,51 +151,26 @@ impl HtraceBridge
 	}
 
 	#[cfg(feature = "tracing_consumer")]
-	/// return a filtered layer for tracing
+	/// return the bridge layer filtered by `tracing_filter_span`
 	pub fn filtered<S>(self) -> impl Layer<S>
 	where
-		S: for<'a> tracing_subscriber::registry::LookupSpan<'a> + tracing::Subscriber,
+		S: for<'a> LookupSpan<'a> + Subscriber,
 	{
-		let filter_list = self.tracing_filter_span.clone();
-		let only_requests_or_user =
-			dynamic_filter_fn(move |_meta: &Metadata<'_>, ctx: &Context<'_, S>| {
-				if let Some(span) = ctx.lookup_current()
-				{
-					match &filter_list
-					{
-						HtraceBridgeSpanFilterList::Allow(allowed) =>
-						{
-							//println!("span {} : ALLOW ? {}",&span.name(),allowed.contains(&span.name().to_string()));
-							if allowed.contains(&span.name().to_string())
-							{
-								return true;
-							}
-						}
-						HtraceBridgeSpanFilterList::Deny(denied) =>
-						{
-							//println!("span {} : DENY ? {}",&span.name(),denied.contains(&span.name().to_string()));
-							if !denied.contains(&span.name().to_string())
-							{
-								return true;
-							}
-						}
-					}
-					return false;
-				};
-
-				return true;
-			});
-
-		self.with_filter(only_requests_or_user)
+		let filter = SpanFilter {
+			list: self.tracing_filter_span.clone(),
+			minLevel: self.tracing_min_level,
+		};
+		self.with_filter(filter)
 	}
 }
 
+/// Backtraces start at ERROR, like the macros.
 impl Default for HtraceBridge
 {
 	fn default() -> Self
 	{
 		HtraceBridge {
-			min_level_backtrace: Some(Level::WARNING),
+			min_level_backtrace: Some(Level::ERROR),
 			#[cfg(feature = "log_consumer")]
 			log_min_level: Level::DEBUG,
 			#[cfg(feature = "tracing_consumer")]
@@ -125,5 +178,21 @@ impl Default for HtraceBridge
 			#[cfg(feature = "tracing_consumer")]
 			tracing_filter_span: Default::default(),
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests
+{
+	use super::*;
+
+	#[test]
+	fn default_backtrace_level_matches_the_macros()
+	{
+		let bridge = HtraceBridge::default();
+		assert_eq!(bridge.min_level_backtrace, Some(Level::ERROR));
+		assert!(!bridge.isBacktrace(&Level::WARNING));
+		assert!(bridge.isBacktrace(&Level::ERROR));
+		assert!(bridge.isBacktrace(&Level::FATAL));
 	}
 }

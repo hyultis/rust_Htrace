@@ -28,11 +28,11 @@ use htrace::components::{context::Context, level::Level};
 use htrace::htracer::HTracer;
 use htrace::modules::{command_line::CommandLine, command_line_config::CommandLineConfig};
 
-fn main() -> Result<(), htrace::htracer::ControlError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut context = Context::default();
     context.module_add("console", CommandLine::new(CommandLineConfig::default()));
     context.level_setMin(Some(Level::DEBUG));
-    HTracer::globalContext_set(context);
+    HTracer::globalContext_set(context)?;
 
     HTrace!("started");
     HTrace!("count = {}", 42);
@@ -45,7 +45,8 @@ fn main() -> Result<(), htrace::htracer::ControlError> {
     HTraceError!((Level::WARNING) "request error: {}", result);
     assert!(result.is_err());
 
-    HTracer::shutdown()
+    HTracer::shutdown()?;
+    Ok(())
 }
 ```
 
@@ -68,6 +69,7 @@ Example terminal output (levels and messages are colored):
 - `Spaned!("name")` names a scope. Pass a `Context` to customize its threshold,
   outputs or extra fields. Contexts inherit from their parent and are isolated per thread.
 
+Every producer is shown as `MAIN`; native OS thread names are never used.
 To group a worker's logs under a shared thread name, install a context in its scope:
 
 ```rust
@@ -76,7 +78,9 @@ context.threadName_set("taskpool");
 htrace::Spaned!(context);
 ```
 
-The name applies to `{thread}` and file grouping for this scope and its children.
+The name applies to `{thread}` and file grouping for this scope and its children,
+and the previous name is restored when the scope ends. A name set on the global
+context is ignored.
 
 Disabled traces skip message evaluation, formatting and backtrace capture.
 `HTraceError!` always evaluates the Result expression once, even when filtered.
@@ -103,7 +107,7 @@ let mut context = Context::default();
 context.name_set("checkout");
 context.extra_set("request_id", "req-42");
 context.module_add("console", CommandLine::new(config));
-HTracer::globalContext_set(context);
+HTracer::globalContext_set(context)?;
 
 HTrace!((Level::NOTICE) "Payment accepted");
 ```
@@ -118,13 +122,15 @@ and can also be attached to a scoped context through `Spaned!`.
 
 `{context:> | }` appends ` | ` only when the context name is nonempty;
 `{context:<scope: }` adds a conditional prefix. `lineReturn` prefixes continuation
-lines in multiline messages and backtraces. Console colors are configured per
+lines in multiline messages and backtraces; only real line breaks count, so
+literal sequences such as `C:\new` are kept. Line breaks in other fields become
+spaces. Console colors are configured per
 level through `CommandLineConfig::colors`; an empty map disables coloring.
 
 ## Outputs and features
 
 `CommandLine` writes colored stdout. `File` writes logs by date/hour, producer
-name or source file, or to a shared file. Unnamed threads share `MAIN`; spaces
+name or source file, or to a shared file. Producers without a span name share `MAIN`; spaces
 and parentheses are preserved in filenames, and unsafe characters become `_`.
 Both outputs have customizable formats.
 The configured trace directory is reserved for HTrace logs; do not store unrelated
@@ -139,6 +145,7 @@ let config = htrace::modules::file_config::FileConfig {
     purgeOnStartup: false,  // Set true to delete all existing .trc files at startup.
     ..Default::default()
 };
+let file = htrace::modules::file::File::new(config)?; // Err(Errors::EmptyPath) for an empty path.
 ```
 
 Both options default to disabled; `Some(0)` also disables age-based cleanup.
@@ -147,6 +154,20 @@ Hconfig uses the same keys: `"purgeAfterDays": 7` (or `null`/`0`) and
 directory are eligible; links, subdirectories and other extensions are skipped.
 Use one owning file module per directory and keep the directory and its parents
 stable during execution. See [cleanup behavior and limits](docs/runtime.md#file-cleanup).
+
+With the `hconfig` feature, module configurations are read from a loaded
+Hconfig node; a missing node is created with the supplied defaults:
+
+```rust
+use htrace::modules::{command_line_config::CommandLineConfig, file_config::FileConfig};
+Hconfig::HConfigManager::HConfigManager::singleton().create::<Hconfig::IO::json::WrapperJson>("htrace")?;
+let console = CommandLineConfig::from_hconfig("htrace", "cmd", CommandLineConfig::default())?;
+let file = FileConfig::from_hconfig("htrace", "file", FileConfig::default())?;
+```
+
+`Errors::CannotFoundConfigNode` reports an unloaded config or an unreachable
+node; `Errors::ModuleConfigError("file" | "command_line", cause)` reports a node
+that is not a JSON object or an empty file `path`.
 
 | Feature | Purpose |
 | --- | --- |
@@ -157,7 +178,12 @@ stable during execution. See [cleanup behavior and limits](docs/runtime.md#file-
 
 Initialize Htrace once at the application's entry point. With either consumer
 feature, pass a bridge as the second argument:
-`HTracer::globalContext_set(context, htrace::crates::bridge::HtraceBridge::default())`.
+`HTracer::globalContext_set(context, htrace::crates::bridge::HtraceBridge::default())?`.
+`globalContext_set` returns `Result<(), htrace::Errors>`; it fails after shutdown,
+when another `log` logger or `tracing` subscriber is already installed, or when a
+different bridge was installed earlier (one bridge per process). The `tracing`
+span filter defaults to `AllowAll`; `DenyAll`, `Allow(names)` and `Deny(names)`
+check every ancestor span. See [bridges](docs/runtime.md#bridges-log--tracing).
 
 ## Finishing and diagnostics
 

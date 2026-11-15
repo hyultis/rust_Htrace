@@ -70,8 +70,10 @@ their panics are not silently converted into logger success.
 
 See the [protocol and comparison](README.md), [comparison data](comparison.json),
 and [file output study](file_output.md). 30 valid before runs + 30 valid after
-runs, with no detected loss or timeouts. The harness was identical, external
-dependencies were unchanged, and sources remained stable during measurements.
+runs, with no detected loss or timeouts. Both series used the same harness,
+which differs from the current `examples/benchmark.rs` (it called
+`HTracer::drop`; see the [protocol](README.md)). External dependencies were
+unchanged, and sources remained stable during measurements.
 The dates, uncontrolled load, small volumes, and sampling limit the conclusions.
 
 ## API and README review — 2026-11-04
